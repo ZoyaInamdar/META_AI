@@ -24,9 +24,35 @@
  * - -X axis: Points outward towards the Small Cup.
  * - +Z / -Z: Front / back facing axis.
  *
+ * Side cups (Big Cup and Small Cup) use an upright-tilted normal convention
+ * pointing outward and upward (tilted towards +Y) reflecting the ergonomic angle
+ * of kendama cups during play.
+ *
  * This module has ZERO dependencies on Three.js or IWSDK runtime, keeping it
  * completely pure, deterministic, and testable anywhere.
  */
+
+/**
+ * Standard Kendama ball (Tama) radius in meters (3.0 cm radius, 6.0 cm diameter).
+ * @type {number}
+ */
+export const BALL_RADIUS = 0.03;
+
+/**
+ * Normalizes a 3D vector so its length is exactly 1.0 within floating point tolerance.
+ *
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @returns {{ x: number, y: number, z: number }}
+ */
+function normalizeVec3(x, y, z) {
+    const len = Math.hypot(x, y, z);
+    if (len === 0) {
+        return { x: 0.0, y: 0.0, z: 0.0 };
+    }
+    return { x: x / len, y: y / len, z: z / len };
+}
 
 /**
  * Deeply freezes an object to make it completely immutable at runtime.
@@ -79,8 +105,13 @@ export const CUP_CONFIGS = deepFreeze({
         // Local 3D offset relative to Ken grip origin [meters]
         position: { x: 0.055, y: 0.12, z: 0.0 },
 
-        // Normal unit vector pointing out of the cup rim
-        normal: { x: 1.0, y: 0.0, z: 0.0 },
+        // Normal unit vector pointing out of the cup rim (upright-tilted convention)
+        normal: normalizeVec3(0.33, 0.944, 0.0),
+
+        // Cup rim & cavity geometry [meters]
+        rimRadius: 0.045,
+        depth: 0.03,
+        seatDepth: 0.01,
 
         // Catch radii [meters]
         // Clean catch requires accurate placement inside the cup rim
@@ -107,8 +138,13 @@ export const CUP_CONFIGS = deepFreeze({
         // Local 3D offset relative to Ken grip origin [meters]
         position: { x: -0.050, y: 0.12, z: 0.0 },
 
-        // Normal unit vector pointing out of the cup rim
-        normal: { x: -1.0, y: 0.0, z: 0.0 },
+        // Normal unit vector pointing out of the cup rim (upright-tilted convention)
+        normal: normalizeVec3(-0.33, 0.944, 0.0),
+
+        // Cup rim & cavity geometry [meters]
+        rimRadius: 0.040,
+        depth: 0.03,
+        seatDepth: 0.01,
 
         // Catch radii [meters] (smaller than Big Cup)
         cleanCatchRadius: 0.040,
@@ -133,6 +169,11 @@ export const CUP_CONFIGS = deepFreeze({
 
         // Normal unit vector pointing straight down along the handle
         normal: { x: 0.0, y: -1.0, z: 0.0 },
+
+        // Cup rim & cavity geometry [meters]
+        rimRadius: 0.042,
+        depth: 0.03,
+        seatDepth: 0.01,
 
         // Catch radii [meters]
         cleanCatchRadius: 0.038,
