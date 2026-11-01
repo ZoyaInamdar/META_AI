@@ -7,6 +7,7 @@
 import { AssetType, defineAssets } from '@iwsdk/core';
 import { createGallerySet, createSideboardSet, } from './scene-assets/decor.scene-asset.js';
 import { createGraphiteCube, createGraphiteGem, createGraphiteKnot, createGraphiteRing, createPlinth, createStage, createStudioFloor, } from './scene-assets/studio.scene-asset.js';
+import { createBigCupPreviewAsset } from './scene-assets/cup-preview.scene-asset.js';
 const publicAssetUrl = (filePath) => `${import.meta.env.BASE_URL}${filePath.replace(/^\/+/u, '')}`;
 const DEFAULT_STOCK_ASSET_BASE = 'https://cdn.jsdelivr.net/npm/@iwsdk/example-assets@0.4.2/assets';
 const configuredStockAssetBase = import.meta.env.VITE_IWSDK_EXAMPLE_ASSET_BASE_URL?.trim();
@@ -29,6 +30,7 @@ export default defineAssets({
     'graphite-ring': createGraphiteRing(),
     'gallery-set': createGallerySet(),
     'sideboard-set': createSideboardSet(),
+    'big-cup-preview': createBigCupPreviewAsset(),
     robot: {
         url: stockAssetUrl('robot', 'robot.gltf'),
         type: AssetType.GLTF,

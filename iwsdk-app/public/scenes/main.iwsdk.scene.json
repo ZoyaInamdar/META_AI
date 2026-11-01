@@ -227,8 +227,8 @@
           }
         },
         {
-          "id": "robot",
-          "name": "Robot",
+          "id": "cup-preview",
+          "name": "Big Cup Preview",
           "metadata": {
             "iwsdk.validation": {
               "allowFloating": true
@@ -236,21 +236,12 @@
           },
           "content": {
             "type": "asset",
-            "asset": "robot",
-            "castShadow": true
+            "asset": "big-cup-preview",
+            "castShadow": true,
+            "receiveShadow": true
           },
           "transform": {
-            "position": [0, 1.2, -0.02],
-            "scale": 0.6
-          },
-          "components": {
-            "AudioSource": {
-              "src": "./audio/chime.mp3",
-              "maxInstances": 3,
-              "playbackMode": "fade-restart"
-            },
-            "RayInteractable": {},
-            "Robot": {}
+            "position": [0, 1.1, -0.02]
           }
         },
         {
