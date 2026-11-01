@@ -1,0 +1,66 @@
+# Dependencies
+node_modules/
+.pnpm-debug.log*
+
+# Build outputs
+dist/
+dist-ssr/
+*.tsbuildinfo
+
+# Test and coverage
+coverage/
+*.lcov
+.vitest/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.production
+
+# IDE and OS files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Logs and debug
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime and temporary data
+pids/
+*.pid
+*.seed
+*.pid.lock
+.tmp/
+.temp/
+.iwsdk/
+.gemini/
+
+# MCP and agent configs generated locally (with machine-specific paths)
+.mcp.json
+.cursor/mcp.json
+.cursor/permissions.json
+.claude/settings.json
+.codex/config.toml
+opencode.json
+
