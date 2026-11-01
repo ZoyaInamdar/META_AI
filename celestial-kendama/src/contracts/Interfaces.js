@@ -3,46 +3,67 @@
 /**
  * Shared event symbols used across the EventBus.
  */
-export const Events = {
+export const Events = Object.freeze({
   SCORE: 'score',
   MISS: 'miss',
   CATCH: 'catch',
+  BALL: 'ball',
   CADENCE: 'cadence',
   TARGET: 'target',
   MISSION: 'mission',
   PHYSICS: 'physics',
   PLANET: 'planet'
-};
+});
 
-export const CatchType = {
-  CLEAN: 'CLEAN',
-  ASSISTED: 'ASSISTED',
-  MISS: 'MISS',
-  NONE: 'NONE'
-};
-
-export const TargetCup = {
+/**
+ * Canonical cup keys for kendama target identification.
+ */
+export const CupKey = Object.freeze({
   BIG: 'big',
   SMALL: 'small',
   BASE: 'base',
   SPIKE: 'spike'
-};
+});
+
+// Backward-compatibility alias
+export const TargetCup = CupKey;
+
+/**
+ * Canonical trick types used in progression sequences.
+ */
+export const TrickType = Object.freeze({
+  SINGLE: 'single',
+  ALTERNATE: 'alternate',
+  AROUND: 'around',
+  SPIKE: 'spike'
+});
+
+/**
+ * Spatial evaluation contact outcomes.
+ */
+export const CatchType = Object.freeze({
+  CLEAN: 'CLEAN',
+  ASSISTED: 'ASSISTED',
+  MISS: 'MISS',
+  NONE: 'NONE'
+});
 
 /**
  * TargetState
  * Owned & emitted by: Person B (TrickSequencer.js / MissionController.js)
- * Consumed by: Person A (trick sequence matching) and Person C (glowing cup ring renderer)
+ * Consumed by: Person A (evaluates catch against target cup only)
+ *              and Person C (renders glowing halo indicator on target cup)
  */
 export class TargetState {
   /**
-   * @param {string} [cupKey='big'] - 'big' | 'small' | 'base' | 'spike'
-   * @param {string} [trick='single'] - 'single' | 'alternate' | 'around' | 'spike'
-   * @param {number} [sequenceIndex=0] - Integer counter
+   * @param {string} [cupKey=CupKey.BIG] - 'big' | 'small' | 'base' | 'spike'
+   * @param {string} [trick=TrickType.SINGLE] - 'single' | 'alternate' | 'around' | 'spike'
+   * @param {number} [sequenceIndex=0] - integer counter from 0
    */
-  constructor(cupKey = 'big', trick = 'single', sequenceIndex = 0) {
-    this.cupKey = cupKey;
-    this.trick = trick;
-    this.sequenceIndex = sequenceIndex;
+  constructor(cupKey = CupKey.BIG, trick = TrickType.SINGLE, sequenceIndex = 0) {
+    this.cupKey = cupKey;               // 'big' | 'small' | 'base' | 'spike'
+    this.trick = trick;                 // 'single' | 'alternate' | 'around' | 'spike'
+    this.sequenceIndex = sequenceIndex; // integer counter from 0
   }
 
   /**
@@ -55,7 +76,8 @@ export class TargetState {
 
 /**
  * BallState
- * Owned & emitted by: Person A
+ * Owned & emitted by: Person A (Hands / BallTrajectory)
+ * Consumed by: Person C (visual kendama ball)
  */
 export class BallState {
   constructor() {
@@ -67,7 +89,8 @@ export class BallState {
 
 /**
  * ScoreEvent
- * Owned & emitted by: Person A
+ * Owned & emitted by: Person A (ScoreManager.js)
+ * Consumed by: Person B (MissionController.js) and Person C (HUD / Audio)
  */
 export class ScoreEvent {
   constructor(eventId, catchType, awardedEnergy = 0, streak = 0) {
@@ -80,7 +103,8 @@ export class ScoreEvent {
 
 /**
  * PhysicsState
- * Owned & emitted by: Person B
+ * Owned & emitted by: Person B (OrbitalEngine.js)
+ * Consumed by: Person C (celestial skyward world renderer)
  */
 export class PhysicsState {
   constructor() {
@@ -92,7 +116,8 @@ export class PhysicsState {
 
 /**
  * MissionState
- * Owned & emitted by: Person B
+ * Owned & emitted by: Person B (MissionController.js)
+ * Consumed by: Person C (HUD banner, chapter progression)
  */
 export class MissionState {
   constructor() {
@@ -105,7 +130,8 @@ export class MissionState {
 
 /**
  * PlanetState
- * Owned & emitted by: Person B to Person C
+ * Owned & emitted by: Person B (MissionController.js)
+ * Consumed by: Person C (shader materials, dual planet visuals)
  */
 export class PlanetState {
   constructor() {

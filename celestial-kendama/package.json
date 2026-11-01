@@ -11,6 +11,7 @@
     "reference:status": "iwsdk reference status",
     "reference:warmup": "iwsdk reference warmup",
     "typecheck": "tsc --noEmit",
+    "test": "node --test tests/**/*.test.js",
     "build": "vite build",
     "preview": "vite preview"
   },
