@@ -784,4 +784,54 @@ export function createSpikeGeometry(options = {}) {
     return geometry;
 }
 
+/**
+ * Derives the spike length required to reach the configured spike tip position
+ * given the Sarado crossbar elevation.
+ *
+ * @param {object} spikeConfig - Spike configuration from cupConfigs.js
+ * @param {number} [saradoElevationY=DEFAULT_SARADO_ELEVATION_Y] - Vertical elevation of Sarado crossbar
+ * @returns {number} Length of spike from crossbar junction to tip in meters
+ */
+export function deriveSpikeLength(spikeConfig, saradoElevationY = DEFAULT_SARADO_ELEVATION_Y) {
+    if (!spikeConfig || !spikeConfig.position || typeof spikeConfig.position.y !== 'number') {
+        throw new TypeError('deriveSpikeLength: spikeConfig must have a numeric position.y');
+    }
+    const length = spikeConfig.position.y - saradoElevationY;
+    if (length <= 0) {
+        throw new RangeError(
+            `deriveSpikeLength: spike tip (${spikeConfig.position.y}) must be higher than sarado elevation (${saradoElevationY})`
+        );
+    }
+    return length;
+}
+
+/**
+ * Derives the handle length, center Y position, and end elevations needed to
+ * cleanly connect between the Base Cup outer bottom and the Sarado crossbar junction.
+ *
+ * @param {object} baseCupConfig - Base cup configuration from cupConfigs.js
+ * @param {object} [options={}] - Geometry options
+ * @param {number} [options.saradoElevationY=DEFAULT_SARADO_ELEVATION_Y] - Sarado crossbar elevation
+ * @param {number} [options.wallThickness=DEFAULT_WALL_THICKNESS] - Wall thickness of the base cup
+ * @returns {{ length: number, centerY: number, bottomY: number, topY: number }}
+ */
+export function deriveHandleDimensions(baseCupConfig, options = {}) {
+    if (!baseCupConfig || !baseCupConfig.position || typeof baseCupConfig.position.y !== 'number') {
+        throw new TypeError('deriveHandleDimensions: baseCupConfig must have a numeric position.y');
+    }
+    const saradoElevationY = options.saradoElevationY ?? DEFAULT_SARADO_ELEVATION_Y;
+    const wallThickness = options.wallThickness ?? DEFAULT_WALL_THICKNESS;
+    const depth = baseCupConfig.depth ?? 0.03;
+
+    // The inverted base cup aperture is at baseCupConfig.position.y (-0.090 m)
+    // with its outer base extending upward by (depth + wallThickness) = 0.033 m to y = -0.0570 m.
+    const outerDepth = depth + wallThickness;
+    const bottomY = baseCupConfig.position.y + outerDepth;
+    const topY = saradoElevationY;
+    const length = topY - bottomY;
+    const centerY = (topY + bottomY) * 0.5;
+
+    return { length, centerY, bottomY, topY };
+}
+
 export default createCupGeometry;

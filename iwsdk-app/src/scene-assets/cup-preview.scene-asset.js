@@ -19,7 +19,6 @@
 import {
     Group,
     Mesh,
-    MeshStandardMaterial,
     Vector3,
     Quaternion,
     DirectionalLight,
@@ -30,32 +29,51 @@ import {
     createCrossbarGeometry,
     createHandleGeometry,
     createSpikeGeometry,
+    deriveSpikeLength,
+    deriveHandleDimensions,
     DEFAULT_SARADO_ELEVATION_Y,
 } from '../render/KenGeometry.js';
 import { CUP_CONFIGS } from '../game/cupConfigs.js';
+import {
+    COMPONENT_MATERIAL_MAP,
+    moonPearlMaterial,
+    roseNebulaMaterial,
+    lavenderMoonMaterial,
+    pearlWhiteMaterial,
+} from '../render/KenMaterials.js';
 
 /**
  * Builds a complete Kendama assembly hierarchy in local Ken coordinates.
  *
- * @param {MeshStandardMaterial} material - Material for the kendama components
- * @returns {Group} Group containing crossbar, big cup, small cup, spike, and handle
+ * @param {object | import('three').Material} [materials=COMPONENT_MATERIAL_MAP] - Material map or single override Material
+ * @returns {Group} Group containing crossbar, big cup, small cup, base cup, spike, and handle
  */
-export function createKendamaAssemblyGroup(material) {
+export function createKendamaAssemblyGroup(materials = COMPONENT_MATERIAL_MAP) {
     const kenGroup = new Group();
     kenGroup.name = 'kendama-assembly-root';
 
-    // 1. Crossbar (Sarado): Horizontal along X at Sarado elevation
+    // Helper to resolve material per component name
+    const resolveMaterial = (name) => {
+        if (!materials) return COMPONENT_MATERIAL_MAP[name] ?? moonPearlMaterial;
+        // Support single override Material instance (e.g. in test suites)
+        if (materials.isMaterial) return materials;
+        if (typeof materials === 'object' && materials[name]) return materials[name];
+        if (typeof materials === 'function') return materials(name);
+        return COMPONENT_MATERIAL_MAP[name] ?? moonPearlMaterial;
+    };
+
+    // 1. Crossbar (Sarado): Horizontal along X at Sarado elevation (Pearl White)
     const crossbarGeom = createCrossbarGeometry();
-    const crossbarMesh = new Mesh(crossbarGeom, material);
+    const crossbarMesh = new Mesh(crossbarGeom, resolveMaterial('sarado-crossbar'));
     crossbarMesh.name = 'sarado-crossbar';
     crossbarMesh.position.set(0.0, DEFAULT_SARADO_ELEVATION_Y, 0.0);
     crossbarMesh.castShadow = true;
     crossbarMesh.receiveShadow = true;
 
-    // 2. Big Cup (Oozara): Mounted on +X wing at Person A target position
+    // 2. Big Cup (Oozara): Mounted on +X wing at Person A target position (Rose Nebula)
     const bigCupConfig = CUP_CONFIGS.bigCup;
     const bigCupGeom = createCupGeometry(bigCupConfig);
-    const bigCupMesh = new Mesh(bigCupGeom, material);
+    const bigCupMesh = new Mesh(bigCupGeom, resolveMaterial('big-cup-oozara'));
     bigCupMesh.name = 'big-cup-oozara';
     bigCupMesh.position.set(bigCupConfig.position.x, bigCupConfig.position.y, bigCupConfig.position.z);
     bigCupMesh.quaternion.setFromUnitVectors(
@@ -65,10 +83,10 @@ export function createKendamaAssemblyGroup(material) {
     bigCupMesh.castShadow = true;
     bigCupMesh.receiveShadow = true;
 
-    // 3. Small Cup (Kozara): Mounted on -X wing at Person A target position
+    // 3. Small Cup (Kozara): Mounted on -X wing at Person A target position (Lavender Moon)
     const smallCupConfig = CUP_CONFIGS.smallCup;
     const smallCupGeom = createCupGeometry(smallCupConfig);
-    const smallCupMesh = new Mesh(smallCupGeom, material);
+    const smallCupMesh = new Mesh(smallCupGeom, resolveMaterial('small-cup-kozara'));
     smallCupMesh.name = 'small-cup-kozara';
     smallCupMesh.position.set(smallCupConfig.position.x, smallCupConfig.position.y, smallCupConfig.position.z);
     smallCupMesh.quaternion.setFromUnitVectors(
@@ -78,29 +96,53 @@ export function createKendamaAssemblyGroup(material) {
     smallCupMesh.castShadow = true;
     smallCupMesh.receiveShadow = true;
 
-    // 4. Spike (Kensaki): Extends upward from Sarado junction to tip at y = 0.185 m
-    const spikeGeom = createSpikeGeometry();
-    const spikeMesh = new Mesh(spikeGeom, material);
+    // 4. Base Cup (Chuzara): Mounted on handle base at Person A target position (Rose Nebula)
+    const baseCupConfig = CUP_CONFIGS.baseCup;
+    const baseCupGeom = createCupGeometry(baseCupConfig);
+    const baseCupMesh = new Mesh(baseCupGeom, resolveMaterial('base-cup-chuzara'));
+    baseCupMesh.name = 'base-cup-chuzara';
+    baseCupMesh.position.set(baseCupConfig.position.x, baseCupConfig.position.y, baseCupConfig.position.z);
+    baseCupMesh.quaternion.setFromUnitVectors(
+        new Vector3(0, 1, 0),
+        new Vector3(baseCupConfig.normal.x, baseCupConfig.normal.y, baseCupConfig.normal.z).normalize()
+    );
+    baseCupMesh.castShadow = true;
+    baseCupMesh.receiveShadow = true;
+
+    // 5. Spike (Kensaki): Extends upward from Sarado junction to tip at Person A target position (Moon Pearl)
+    const spikeConfig = CUP_CONFIGS.spike;
+    const saradoElevationY = DEFAULT_SARADO_ELEVATION_Y;
+    const spikeLength = deriveSpikeLength(spikeConfig, saradoElevationY);
+    const spikeGeom = createSpikeGeometry({ length: spikeLength });
+    const spikeMesh = new Mesh(spikeGeom, resolveMaterial('spike-kensaki'));
     spikeMesh.name = 'spike-kensaki';
-    spikeMesh.position.set(0.0, DEFAULT_SARADO_ELEVATION_Y, 0.0);
+    spikeMesh.position.set(spikeConfig.position.x, saradoElevationY, spikeConfig.position.z);
+    spikeMesh.quaternion.setFromUnitVectors(
+        new Vector3(0, 1, 0),
+        new Vector3(spikeConfig.normal.x, spikeConfig.normal.y, spikeConfig.normal.z).normalize()
+    );
     spikeMesh.castShadow = true;
     spikeMesh.receiveShadow = true;
 
-    // 5. Handle (Ken shaft): Descends from crossbar junction through grip origin (y = 0)
-    // Length: 0.145 m, positioned at y = 0.0159 m (top at y = 0.0884 m, bottom at y = -0.0566 m)
+    // 6. Handle (Ken shaft): Descends from crossbar junction through grip origin (y = 0) to meet Base Cup (Moon Pearl)
+    // Base cup top (outer bottom) is at y = baseCupConfig.position.y + (baseCupConfig.depth + wallThickness) = -0.090 + 0.033 = -0.0570 m.
+    // Crossbar center is at y = DEFAULT_SARADO_ELEVATION_Y = 0.08885 m.
+    // Handle spans from y = -0.0570 m to y = 0.08885 m (length = 0.14585 m, center = 0.015925 m).
+    const handleDims = deriveHandleDimensions(baseCupConfig, { saradoElevationY });
     const handleGeom = createHandleGeometry({
-        length: 0.145,
+        length: handleDims.length,
         topRadius: 0.012,
-        bottomRadius: 0.013,
+        bottomRadius: 0.015,
         waistRadius: 0.0105,
+        filletRadius: 0.0015,
     });
-    const handleMesh = new Mesh(handleGeom, material);
+    const handleMesh = new Mesh(handleGeom, resolveMaterial('handle-ken'));
     handleMesh.name = 'handle-ken';
-    handleMesh.position.set(0.0, 0.0159, 0.0);
+    handleMesh.position.set(0.0, handleDims.centerY, 0.0);
     handleMesh.castShadow = true;
     handleMesh.receiveShadow = true;
 
-    kenGroup.add(crossbarMesh, bigCupMesh, smallCupMesh, spikeMesh, handleMesh);
+    kenGroup.add(crossbarMesh, bigCupMesh, smallCupMesh, baseCupMesh, spikeMesh, handleMesh);
     return kenGroup;
 }
 
@@ -114,27 +156,21 @@ export function createBigCupPreviewAsset() {
     const root = new Group();
     root.name = 'big-cup-preview-root';
 
-    // Neutral grey matte/satin material to clearly reveal geometric contours
-    const neutralGreyMaterial = new MeshStandardMaterial({
-        color: 0x8a8a8a,      // Neutral 54% mid-grey
-        roughness: 0.45,      // Satin finish to highlight specular curvature and contours
-        metalness: 0.05,      // Non-metallic dielectric response
-    });
-
     // 1. Center Model: Upright Kendama Assembly (Front / Turntable Perspective View)
-    const centerModel = createKendamaAssemblyGroup(neutralGreyMaterial);
+    // Uses the shared celestial pastel galaxy material palette
+    const centerModel = createKendamaAssemblyGroup();
     centerModel.name = 'big-cup-three-quarter';
     centerModel.position.set(0.0, 0.0, 0.0);
 
     // 2. Left Model: Top-Down View (Cavity Interiors & Spike Alignment Inspection)
-    const leftModel = createKendamaAssemblyGroup(neutralGreyMaterial);
+    const leftModel = createKendamaAssemblyGroup();
     leftModel.name = 'big-cup-cavity-view';
     leftModel.position.set(-0.22, 0.0, 0.0);
     // Tilt forward ~72 degrees toward viewer to inspect cavities and crossbar top
     leftModel.quaternion.setFromAxisAngle(new Vector3(1, 0, 0), Math.PI * 0.40);
 
     // 3. Right Model: Three-Quarter / Side Profile View (Wing Flaring & Grip Inspection)
-    const rightModel = createKendamaAssemblyGroup(neutralGreyMaterial);
+    const rightModel = createKendamaAssemblyGroup();
     rightModel.name = 'big-cup-profile-view';
     rightModel.position.set(0.22, 0.0, 0.0);
     // Rotate 45 degrees around Y and slightly tilt to display depth

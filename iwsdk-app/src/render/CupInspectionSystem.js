@@ -144,38 +144,50 @@ export class CupInspectionSystem extends createSystem({}) {
                 }
             }
 
-            // 5. Cup Meshes Inspection: Matrices, Bounding Boxes, Frustum, Draw Call Hook
-            const cupMeshNames = ['big-cup-three-quarter', 'big-cup-cavity-view', 'big-cup-profile-view'];
-            for (const name of cupMeshNames) {
-                const mesh = cupNode.getObjectByName(name);
-                if (mesh) {
-                    const worldPos = new Vector3();
-                    mesh.getWorldPosition(worldPos);
-                    const box = new Box3().setFromObject(mesh);
-                    const inFrustum = frustum ? frustum.intersectsBox(box) : 'unknown (no camera)';
-
-                    // Draw-call dispatch verification hook
-                    mesh.onBeforeRender = () => {
-                        if (!mesh.userData._hasLoggedRender) {
-                            mesh.userData._hasLoggedRender = true;
-                            console.log(`[RENDER-DIAGNOSTIC] WebGLRenderer draw call dispatched for mesh "${mesh.name}"!`);
+            // 5. Kendama Meshes & Materials Runtime Audit
+            console.log('[DIAGNOSTIC] === Kendama Mesh & Material Runtime Audit ===');
+            cupNode.traverse((child) => {
+                if (child.isMesh) {
+                    const mat = child.material;
+                    child.onBeforeRender = () => {
+                        if (!child.userData._hasLoggedRender) {
+                            child.userData._hasLoggedRender = true;
+                            console.log(`[RENDER-DIAGNOSTIC] Mesh "${child.name}" rendering with material "${mat?.name}" (cacheKey: ${mat?.customProgramCacheKey?.()})`);
                         }
                     };
+                    console.log(`[DIAGNOSTIC] Mesh "${child.name}" in "${child.parent?.name}":`, {
+                        materialName: mat?.name,
+                        materialType: mat?.type,
+                        hasOnBeforeCompile: typeof mat?.onBeforeCompile === 'function',
+                        cacheKey: mat?.customProgramCacheKey?.(),
+                        clearcoat: mat?.clearcoat,
+                        iridescence: mat?.iridescence,
+                    });
+                }
+            });
 
-                    console.log(`[DIAGNOSTIC] Mesh "${name}":`, {
-                        visible: mesh.visible,
-                        materialType: mesh.material?.type,
-                        materialColor: mesh.material?.color?.getHexString(),
+            // 6. Assembly Groups Inspection: Matrices, Bounding Boxes, Frustum
+            const cupMeshNames = ['big-cup-three-quarter', 'big-cup-cavity-view', 'big-cup-profile-view'];
+            for (const name of cupMeshNames) {
+                const assemblyGroup = cupNode.getObjectByName(name);
+                if (assemblyGroup) {
+                    const worldPos = new Vector3();
+                    assemblyGroup.getWorldPosition(worldPos);
+                    const box = new Box3().setFromObject(assemblyGroup);
+                    const inFrustum = frustum ? frustum.intersectsBox(box) : 'unknown (no camera)';
+
+                    console.log(`[DIAGNOSTIC] Assembly "${name}":`, {
+                        visible: assemblyGroup.visible,
                         worldPosition: [worldPos.x.toFixed(4), worldPos.y.toFixed(4), worldPos.z.toFixed(4)],
                         boundingBox: {
                             min: [box.min.x.toFixed(4), box.min.y.toFixed(4), box.min.z.toFixed(4)],
                             max: [box.max.x.toFixed(4), box.max.y.toFixed(4), box.max.z.toFixed(4)]
                         },
-                        matrixWorldValid: !Number.isNaN(mesh.matrixWorld.elements[0]),
+                        matrixWorldValid: !Number.isNaN(assemblyGroup.matrixWorld.elements[0]),
                         insideCameraFrustum: inFrustum
                     });
                 } else {
-                    console.warn(`[DIAGNOSTIC] Mesh "${name}" NOT found in cupNode!`);
+                    console.warn(`[DIAGNOSTIC] Assembly "${name}" NOT found in cupNode!`);
                 }
             }
 

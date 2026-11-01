@@ -12,6 +12,7 @@ import {
     MeshBasicMaterial,
     DoubleSide,
     Raycaster,
+    Box3,
 } from 'three';
 import { CUP_CONFIGS, getCupConfig } from '../game/cupConfigs.js';
 import {
@@ -19,6 +20,8 @@ import {
     createHandleGeometry,
     createCrossbarGeometry,
     createSpikeGeometry,
+    deriveSpikeLength,
+    deriveHandleDimensions,
     DEFAULT_WALL_THICKNESS,
     DEFAULT_RADIAL_SEGMENTS,
     DEFAULT_PROFILE_STEPS,
@@ -39,6 +42,7 @@ import {
     DEFAULT_SPIKE_ROOT_RADIUS,
     DEFAULT_SPIKE_TIP_RADIUS,
 } from './KenGeometry.js';
+import { createKendamaAssemblyGroup } from '../scene-assets/cup-preview.scene-asset.js';
 
 describe('KenGeometry Module', () => {
     describe('Big Cup Geometry Generation', () => {
@@ -1027,5 +1031,270 @@ describe('KenGeometry Module', () => {
             assert.throws(() => createSpikeGeometry({ tipRadius: 0.01, rootRadius: 0.005 }), RangeError);
             assert.throws(() => createSpikeGeometry({ radialSegments: 4 }), RangeError);
         });
+    });
+
+    describe('Base Cup Geometry Generation', () => {
+        it('generates a valid LatheGeometry using Person A Base Cup config', () => {
+            const baseCupConfig = CUP_CONFIGS.baseCup;
+            assert.ok(baseCupConfig, 'Base Cup configuration must exist');
+            assert.equal(baseCupConfig.rimRadius, 0.042);
+            assert.equal(baseCupConfig.depth, 0.03);
+
+            const geometry = createCupGeometry(baseCupConfig);
+            assert.ok(geometry, 'createCupGeometry must return a geometry');
+            assert.equal(geometry.type, 'LatheGeometry');
+            assert.ok(geometry.attributes.position.count > 0);
+            assert.ok(geometry.attributes.normal.count > 0);
+            assert.ok(geometry.index);
+        });
+
+        it('creates a hollow base cup with correct bounding box dimensions', () => {
+            const geometry = createCupGeometry(CUP_CONFIGS.baseCup);
+            geometry.computeBoundingBox();
+            const box = geometry.boundingBox;
+
+            const outerRadius = CUP_CONFIGS.baseCup.rimRadius + DEFAULT_WALL_THICKNESS;
+            assert.ok(Math.abs(box.max.x - outerRadius) < 1e-4, 'Max X must equal outer radius');
+            assert.ok(Math.abs(box.min.x - (-outerRadius)) < 1e-4, 'Min X must equal -outer radius');
+            assert.ok(Math.abs(box.max.z - outerRadius) < 1e-4, 'Max Z must equal outer radius');
+            assert.ok(Math.abs(box.min.z - (-outerRadius)) < 1e-4, 'Min Z must equal -outer radius');
+
+            const outerDepth = CUP_CONFIGS.baseCup.depth + DEFAULT_WALL_THICKNESS;
+            assert.ok(Math.abs(box.min.y - (-outerDepth)) < 1e-4, 'Min Y must equal -outerDepth');
+        });
+
+        it('forms a 100% closed, watertight, 2-manifold surface with 0 boundary edges', () => {
+            const geometry = createCupGeometry(CUP_CONFIGS.baseCup);
+            const pos = geometry.attributes.position;
+            const index = geometry.index;
+
+            const TOL = 1e-5;
+            function pKey(x, y, z) {
+                const rx = Math.round(x / TOL) * TOL;
+                const ry = Math.round(y / TOL) * TOL;
+                const rz = Math.round(z / TOL) * TOL;
+                return `${rx.toFixed(5)},${ry.toFixed(5)},${rz.toFixed(5)}`;
+            }
+
+            const spatialMap = new Map();
+            let nextId = 0;
+            for (let i = 0; i < pos.count; i++) {
+                const k = pKey(pos.getX(i), pos.getY(i), pos.getZ(i));
+                if (!spatialMap.has(k)) {
+                    spatialMap.set(k, nextId++);
+                }
+            }
+
+            const edgeFaceCount = new Map();
+            for (let i = 0; i < index.count; i += 3) {
+                const u0 = spatialMap.get(pKey(pos.getX(index.getX(i)), pos.getY(index.getX(i)), pos.getZ(index.getX(i))));
+                const u1 = spatialMap.get(pKey(pos.getX(index.getX(i + 1)), pos.getY(index.getX(i + 1)), pos.getZ(index.getX(i + 1))));
+                const u2 = spatialMap.get(pKey(pos.getX(index.getX(i + 2)), pos.getY(index.getX(i + 2)), pos.getZ(index.getX(i + 2))));
+
+                const triEdges = [[u0, u1], [u1, u2], [u2, u0]];
+                for (const [a, b] of triEdges) {
+                    const ek = a < b ? `${a}-${b}` : `${b}-${a}`;
+                    edgeFaceCount.set(ek, (edgeFaceCount.get(ek) || 0) + 1);
+                }
+            }
+
+            let boundaryEdges = 0;
+            let nonManifoldEdges = 0;
+            for (const count of edgeFaceCount.values()) {
+                if (count === 1) boundaryEdges++;
+                else if (count > 2) nonManifoldEdges++;
+            }
+
+            assert.equal(boundaryEdges, 0, 'Base Cup must have 0 boundary edges (watertight)');
+            assert.equal(nonManifoldEdges, 0, 'Base Cup must have 0 non-manifold edges');
+        });
+
+        it('correctly positions and orients Base Cup mesh pointing downward along -Y', () => {
+            const config = CUP_CONFIGS.baseCup;
+            const geom = createCupGeometry(config);
+            const mat = new MeshBasicMaterial();
+            const mesh = new Mesh(geom, mat);
+            mesh.position.set(config.position.x, config.position.y, config.position.z);
+            mesh.quaternion.setFromUnitVectors(
+                new Vector3(0, 1, 0),
+                new Vector3(config.normal.x, config.normal.y, config.normal.z).normalize()
+            );
+            mesh.updateMatrixWorld(true);
+
+            // Aperture rim center is at configured position (0, -0.090, 0)
+            const box = new Box3().setFromObject(mesh);
+            assert.ok(Math.abs(box.max.y - (-0.0570)) < 1e-4, 'Outer bottom must be at y = -0.0570');
+            assert.ok(box.min.y <= config.position.y, 'Rim lip extends to or slightly past configured position.y');
+            assert.ok(Math.abs(box.min.y - (-0.09045)) < 1e-4, 'Rim crest extends to y = -0.09045');
+
+            // Opening normal points along -Y
+            const normalInWorld = new Vector3(0, 1, 0).applyQuaternion(mesh.quaternion);
+            assert.ok(Math.abs(normalInWorld.x - 0.0) < 1e-6);
+            assert.ok(Math.abs(normalInWorld.y - (-1.0)) < 1e-6);
+            assert.ok(Math.abs(normalInWorld.z - 0.0) < 1e-6);
+        });
+    });
+
+    describe('Spike & Handle Dynamic Derivation', () => {
+        it('deriveSpikeLength computes exact length to reach Person A spike tip', () => {
+            const length = deriveSpikeLength(CUP_CONFIGS.spike, DEFAULT_SARADO_ELEVATION_Y);
+            assert.ok(Math.abs(length - (0.185 - 0.08885)) < 1e-6);
+            assert.ok(Math.abs(length - DEFAULT_SPIKE_LENGTH) < 1e-6);
+
+            // Tip elevation matches configured position
+            const reachedTipY = DEFAULT_SARADO_ELEVATION_Y + length;
+            assert.ok(Math.abs(reachedTipY - CUP_CONFIGS.spike.position.y) < 1e-6);
+        });
+
+        it('deriveSpikeLength validates input correctly', () => {
+            // @ts-ignore
+            assert.throws(() => deriveSpikeLength(null), TypeError);
+            // @ts-ignore
+            assert.throws(() => deriveSpikeLength({}), TypeError);
+            assert.throws(() => deriveSpikeLength({ position: { y: 0.05 } }, 0.08885), RangeError);
+        });
+
+        it('deriveHandleDimensions derives length and placement connecting Base Cup outer bottom to Sarado', () => {
+            const dims = deriveHandleDimensions(CUP_CONFIGS.baseCup, {
+                saradoElevationY: DEFAULT_SARADO_ELEVATION_Y,
+                wallThickness: DEFAULT_WALL_THICKNESS,
+            });
+
+            // Base cup outer bottom is at -0.090 + 0.033 = -0.0570 m
+            assert.ok(Math.abs(dims.bottomY - (-0.0570)) < 1e-6);
+            assert.ok(Math.abs(dims.topY - DEFAULT_SARADO_ELEVATION_Y) < 1e-6);
+            assert.ok(Math.abs(dims.length - (DEFAULT_SARADO_ELEVATION_Y - (-0.0570))) < 1e-6);
+            assert.ok(Math.abs(dims.centerY - (DEFAULT_SARADO_ELEVATION_Y + (-0.0570)) * 0.5) < 1e-6);
+        });
+    });
+
+    describe('Complete Kendama Assembly Verification', () => {
+        const mat = new MeshBasicMaterial({ side: DoubleSide });
+        const assembly = createKendamaAssemblyGroup(mat);
+        assembly.updateMatrixWorld(true);
+
+        it('contains all 6 required components including all 4 functional catch targets', () => {
+            const children = assembly.children;
+            assert.equal(children.length, 6, 'Assembly must contain exactly 6 direct child meshes');
+
+            const childNames = children.map(c => c.name);
+            assert.ok(childNames.includes('sarado-crossbar'), 'Must contain sarado-crossbar');
+            assert.ok(childNames.includes('big-cup-oozara'), 'Must contain big-cup-oozara');
+            assert.ok(childNames.includes('small-cup-kozara'), 'Must contain small-cup-kozara');
+            assert.ok(childNames.includes('base-cup-chuzara'), 'Must contain base-cup-chuzara');
+            assert.ok(childNames.includes('spike-kensaki'), 'Must contain spike-kensaki');
+            assert.ok(childNames.includes('handle-ken'), 'Must contain handle-ken');
+        });
+
+        it('places Big Cup at Person A configured position and orientation', () => {
+            const mesh = assembly.getObjectByName('big-cup-oozara');
+            assert.ok(mesh);
+            assert.ok(Math.abs(mesh.position.x - CUP_CONFIGS.bigCup.position.x) < 1e-6);
+            assert.ok(Math.abs(mesh.position.y - CUP_CONFIGS.bigCup.position.y) < 1e-6);
+            assert.ok(Math.abs(mesh.position.z - CUP_CONFIGS.bigCup.position.z) < 1e-6);
+
+            const normal = new Vector3(0, 1, 0).applyQuaternion(mesh.quaternion);
+            const expectedNorm = new Vector3(CUP_CONFIGS.bigCup.normal.x, CUP_CONFIGS.bigCup.normal.y, CUP_CONFIGS.bigCup.normal.z).normalize();
+            assert.ok(normal.distanceTo(expectedNorm) < 1e-5, 'Big Cup normal must match configured normal');
+        });
+
+        it('places Small Cup at Person A configured position and orientation', () => {
+            const mesh = assembly.getObjectByName('small-cup-kozara');
+            assert.ok(mesh);
+            assert.ok(Math.abs(mesh.position.x - CUP_CONFIGS.smallCup.position.x) < 1e-6);
+            assert.ok(Math.abs(mesh.position.y - CUP_CONFIGS.smallCup.position.y) < 1e-6);
+            assert.ok(Math.abs(mesh.position.z - CUP_CONFIGS.smallCup.position.z) < 1e-6);
+
+            const normal = new Vector3(0, 1, 0).applyQuaternion(mesh.quaternion);
+            const expectedNorm = new Vector3(CUP_CONFIGS.smallCup.normal.x, CUP_CONFIGS.smallCup.normal.y, CUP_CONFIGS.smallCup.normal.z).normalize();
+            assert.ok(normal.distanceTo(expectedNorm) < 1e-5, 'Small Cup normal must match configured normal');
+        });
+
+        it('places Base Cup at Person A configured position and orientation', () => {
+            const mesh = assembly.getObjectByName('base-cup-chuzara');
+            assert.ok(mesh);
+            assert.ok(Math.abs(mesh.position.x - CUP_CONFIGS.baseCup.position.x) < 1e-6);
+            assert.ok(Math.abs(mesh.position.y - CUP_CONFIGS.baseCup.position.y) < 1e-6);
+            assert.ok(Math.abs(mesh.position.z - CUP_CONFIGS.baseCup.position.z) < 1e-6);
+
+            const normal = new Vector3(0, 1, 0).applyQuaternion(mesh.quaternion);
+            const expectedNorm = new Vector3(CUP_CONFIGS.baseCup.normal.x, CUP_CONFIGS.baseCup.normal.y, CUP_CONFIGS.baseCup.normal.z).normalize();
+            assert.ok(normal.distanceTo(expectedNorm) < 1e-5, 'Base Cup normal must point straight down');
+        });
+
+        it('ensures Spike tip reaches Person A configured position (0, 0.185, 0)', () => {
+            const mesh = assembly.getObjectByName('spike-kensaki');
+            assert.ok(mesh);
+
+            mesh.geometry.computeBoundingBox();
+            const spikeBox = mesh.geometry.boundingBox;
+            const worldTipY = mesh.position.y + spikeBox.max.y;
+
+            assert.ok(Math.abs(worldTipY - CUP_CONFIGS.spike.position.y) < 1e-4, 'Spike tip must reach y = 0.185 m');
+            assert.ok(Math.abs(mesh.position.x - CUP_CONFIGS.spike.position.x) < 1e-6);
+            assert.ok(Math.abs(mesh.position.z - CUP_CONFIGS.spike.position.z) < 1e-6);
+        });
+
+        it('ensures handle meets Base Cup outer bottom with flush zero-gap contact', () => {
+            const handle = assembly.getObjectByName('handle-ken');
+            const baseCup = assembly.getObjectByName('base-cup-chuzara');
+            assert.ok(handle && baseCup);
+
+            const handleBox = new Box3().setFromObject(handle);
+            const baseBox = new Box3().setFromObject(baseCup);
+
+            // Handle bottom should meet Base Cup top (outer bottom) at y = -0.0570 m
+            assert.ok(Math.abs(handleBox.min.y - baseBox.max.y) < 1e-4, 'Handle bottom and Base Cup outer base must be flush');
+            assert.ok(Math.abs(baseBox.max.y - (-0.0570)) < 1e-4, 'Junction elevation must be y = -0.0570 m');
+        });
+
+        it('ensures Sarado crossbar ends seat flush against side cups', () => {
+            const bigMesh = assembly.getObjectByName('big-cup-oozara');
+            const smallMesh = assembly.getObjectByName('small-cup-kozara');
+            assert.ok(bigMesh && smallMesh);
+
+            const bigNorm = new Vector3(CUP_CONFIGS.bigCup.normal.x, CUP_CONFIGS.bigCup.normal.y, CUP_CONFIGS.bigCup.normal.z).normalize();
+            const bigOuterDepth = CUP_CONFIGS.bigCup.depth + DEFAULT_WALL_THICKNESS;
+            const bigBottomCenter = new Vector3(CUP_CONFIGS.bigCup.position.x, CUP_CONFIGS.bigCup.position.y, CUP_CONFIGS.bigCup.position.z)
+                .sub(bigNorm.multiplyScalar(bigOuterDepth));
+
+            const smallNorm = new Vector3(CUP_CONFIGS.smallCup.normal.x, CUP_CONFIGS.smallCup.normal.y, CUP_CONFIGS.smallCup.normal.z).normalize();
+            const smallOuterDepth = CUP_CONFIGS.smallCup.depth + DEFAULT_WALL_THICKNESS;
+            const smallBottomCenter = new Vector3(CUP_CONFIGS.smallCup.position.x, CUP_CONFIGS.smallCup.position.y, CUP_CONFIGS.smallCup.position.z)
+                .sub(smallNorm.multiplyScalar(smallOuterDepth));
+
+            const saradoBigMount = new Vector3(DEFAULT_CROSSBAR_BIG_SPAN, DEFAULT_SARADO_ELEVATION_Y, 0.0);
+            const saradoSmallMount = new Vector3(-DEFAULT_CROSSBAR_SMALL_SPAN, DEFAULT_SARADO_ELEVATION_Y, 0.0);
+
+            assert.ok(bigBottomCenter.distanceTo(saradoBigMount) < 1e-4, 'Big Cup base must align with Sarado +X wing');
+            assert.ok(smallBottomCenter.distanceTo(saradoSmallMount) < 1e-4, 'Small Cup base must align with Sarado -X wing');
+        });
+    });
+
+    describe('Multi-View Assembly Inspection (7 Viewing Angles)', () => {
+        const mat = new MeshBasicMaterial({ side: DoubleSide });
+        const assembly = createKendamaAssemblyGroup(mat);
+        assembly.updateMatrixWorld(true);
+
+        const views = [
+            { name: 'Front View (+Z to -Z)', rayOrigin: new Vector3(0, 0.088, 1.0), rayDir: new Vector3(0, 0, -1) },
+            { name: 'Back View (-Z to +Z)', rayOrigin: new Vector3(0, 0.088, -1.0), rayDir: new Vector3(0, 0, 1) },
+            { name: 'Left View (-X to +X)', rayOrigin: new Vector3(-1.0, 0.12, 0), rayDir: new Vector3(1, 0, 0) },
+            { name: 'Right View (+X to -X)', rayOrigin: new Vector3(1.0, 0.12, 0), rayDir: new Vector3(-1, 0, 0) },
+            { name: 'Top View (+Y to -Y)', rayOrigin: new Vector3(0, 1.0, 0), rayDir: new Vector3(0, -1, 0) },
+            { name: 'Bottom View (-Y to +Y)', rayOrigin: new Vector3(0, -1.0, 0), rayDir: new Vector3(0, 1, 0) },
+            { name: 'Three-Quarter View', rayOrigin: new Vector3(0.5, 0.5, 0.5), rayDir: new Vector3(-0.5, -0.4, -0.5).normalize() },
+        ];
+
+        for (const view of views) {
+            it(`inspects assembly from ${view.name}`, () => {
+                const raycaster = new Raycaster(view.rayOrigin, view.rayDir);
+                const hits = raycaster.intersectObjects(assembly.children, true);
+                assert.ok(hits.length > 0, `${view.name} must intersect the kendama assembly`);
+                const firstHitMesh = hits[0].object;
+                assert.ok(firstHitMesh, `${view.name} must hit a valid mesh`);
+                assert.ok(hits[0].distance > 0, 'Hit distance must be positive');
+            });
+        }
     });
 });
