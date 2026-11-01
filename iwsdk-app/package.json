@@ -10,6 +10,7 @@
     "dev:status": "iwsdk dev status",
     "reference:status": "iwsdk reference status",
     "reference:warmup": "iwsdk reference warmup",
+    "test": "vitest run",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -21,11 +22,12 @@
     "three": "npm:super-three@0.185.0"
   },
   "devDependencies": {
-    "@iwsdk/reference": "1.1.0-rc.2",
     "@iwsdk/cli": "1.1.0-rc.2",
+    "@iwsdk/reference": "1.1.0-rc.2",
     "@iwsdk/vite-plugin-dev": "1.1.0-rc.2",
     "@meta-quest/metavr": "^1.8.1",
-    "vite": "^7.1.4"
+    "vite": "^7.1.4",
+    "vitest": "^5.0.5"
   },
   "overrides": {
     "sharp": "0.35.4",

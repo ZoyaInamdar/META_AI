@@ -10,7 +10,7 @@
  * ============================================================================
  */
 
-import test, { describe, it } from 'node:test';
+import { describe, it, test } from 'vitest';
 import assert from 'node:assert/strict';
 import {
     KendamaInputAndDetector,
@@ -76,6 +76,41 @@ function createMockKenGroup(
     };
 }
 
+/**
+ * Updates orientation and matrixWorld of an existing mockKen instance.
+ */
+function setMockKenOrientation(mockKen, quaternion) {
+    mockKen.quaternion = { ...quaternion };
+    const qx = quaternion.x;
+    const qy = quaternion.y;
+    const qz = quaternion.z;
+    const qw = quaternion.w;
+
+    const m00 = 1.0 - 2.0 * (qy * qy + qz * qz);
+    const m01 = 2.0 * (qx * qy - qz * qw);
+    const m02 = 2.0 * (qx * qz + qy * qw);
+
+    const m10 = 2.0 * (qx * qy + qz * qw);
+    const m11 = 1.0 - 2.0 * (qx * qx + qz * qz);
+    const m12 = 2.0 * (qy * qz - qx * qw);
+
+    const m20 = 2.0 * (qx * qz - qy * qw);
+    const m21 = 2.0 * (qy * qz + qx * qw);
+    const m22 = 1.0 - 2.0 * (qx * qx + qy * qy);
+
+    mockKen.matrixWorld.elements[0] = m00;
+    mockKen.matrixWorld.elements[1] = m10;
+    mockKen.matrixWorld.elements[2] = m20;
+
+    mockKen.matrixWorld.elements[4] = m01;
+    mockKen.matrixWorld.elements[5] = m11;
+    mockKen.matrixWorld.elements[6] = m21;
+
+    mockKen.matrixWorld.elements[8] = m02;
+    mockKen.matrixWorld.elements[9] = m12;
+    mockKen.matrixWorld.elements[10] = m22;
+}
+
 describe('KendamaInputAndDetector Module', () => {
     it('1. correctly transforms local cup position to world space using matrixWorld', () => {
         const kenPos = { x: 0.5, y: 1.0, z: -0.2 };
@@ -115,7 +150,7 @@ describe('KendamaInputAndDetector Module', () => {
     });
 
     it('3. uses BALL_RADIUS correctly in geometric calculations', () => {
-        assert.equal(BALL_RADIUS, 0.03, 'BALL_RADIUS should be 0.03m');
+        assert.equal(BALL_RADIUS, 0.045, 'BALL_RADIUS should be 0.045m');
 
         const mockKen = createMockKenGroup();
         const detector = new KendamaInputAndDetector(mockKen);
@@ -136,7 +171,9 @@ describe('KendamaInputAndDetector Module', () => {
     });
 
     it('4. distinguishes clean and assisted catch regions', () => {
-        const mockKen = createMockKenGroup();
+        // Rotate Ken +90° around Z so Big Cup (normal [1, 0, 0]) points upward along +Y
+        const bigCupQuat = { x: 0.0, y: 0.0, z: Math.SQRT1_2, w: Math.SQRT1_2 };
+        const mockKen = createMockKenGroup({ x: 0, y: 1.25, z: -0.45 }, bigCupQuat);
         const detector = new KendamaInputAndDetector(mockKen);
         const bigCupWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
 
@@ -186,11 +223,11 @@ describe('KendamaInputAndDetector Module', () => {
     });
 
     it('5. enforces orientation thresholds for all four cups', () => {
-        // Thresholds: Big Cup: 30°, Small Cup: 25°, Base Cup: 35°, Spike: 18°
-        assert.equal(ORIENTATION_THRESHOLDS.bigCup.maxAngleDeg, 30);
-        assert.equal(ORIENTATION_THRESHOLDS.smallCup.maxAngleDeg, 25);
-        assert.equal(ORIENTATION_THRESHOLDS.baseCup.maxAngleDeg, 35);
-        assert.equal(ORIENTATION_THRESHOLDS.spike.maxAngleDeg, 18);
+        // Thresholds derived from cupConfigs minDot: Big: 40°, Small: 40°, Base: 40°, Spike: 18°
+        assert.ok(Math.abs(ORIENTATION_THRESHOLDS.bigCup.maxAngleDeg - 40.0) < 1e-4);
+        assert.ok(Math.abs(ORIENTATION_THRESHOLDS.smallCup.maxAngleDeg - 40.0) < 1e-4);
+        assert.ok(Math.abs(ORIENTATION_THRESHOLDS.baseCup.maxAngleDeg - 40.0) < 1e-4);
+        assert.ok(Math.abs(ORIENTATION_THRESHOLDS.spike.maxAngleDeg - 18.0) < 1e-4);
 
         // Spike upright test (Spike points +Y, angle with world up is 0 deg <= 18 deg)
         const mockKenUpright = createMockKenGroup();
@@ -538,12 +575,14 @@ describe('KendamaInputAndDetector Module', () => {
     });
 
     it('15. candidate cup switching resets confirmation counter and prevents cross-cup confirmation', () => {
-        const mockKen = createMockKenGroup();
+        const roll90Z = { x: 0.0, y: 0.0, z: Math.SQRT1_2, w: Math.SQRT1_2 };
+        const rollNeg90Z = { x: 0.0, y: 0.0, z: -Math.SQRT1_2, w: Math.SQRT1_2 };
+
+        const mockKen = createMockKenGroup({ x: 0.0, y: 1.25, z: -0.45 }, roll90Z);
         const detector = new KendamaInputAndDetector(mockKen);
 
+        // Frame 1: Valid for Big Cup (Ken rolled +90° Z, Big Cup points UP, confirmationCount = 1)
         const bigWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
-        const smallWorld = detector.getWorldCupTransform(CUP_IDS.SMALL_CUP);
-
         const bigPos = {
             x: bigWorld.position.x + bigWorld.normal.x * 0.02,
             y: bigWorld.position.y + bigWorld.normal.y * 0.02,
@@ -555,6 +594,15 @@ describe('KendamaInputAndDetector Module', () => {
             z: -bigWorld.normal.z * 0.5,
         };
 
+        const frame1 = detector.evaluateCatch(bigPos, bigVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
+        assert.equal(frame1.valid, true);
+        assert.equal(frame1.cupKey, CUP_IDS.BIG_CUP);
+        assert.equal(frame1.confirmationCount, 1);
+        assert.equal(frame1.confirmed, false);
+
+        // Frame 2: Valid for Small Cup (Ken rolled -90° Z, Small Cup points UP, switches candidate cup)
+        setMockKenOrientation(mockKen, rollNeg90Z);
+        const smallWorld = detector.getWorldCupTransform(CUP_IDS.SMALL_CUP);
         const smallPos = {
             x: smallWorld.position.x + smallWorld.normal.x * 0.02,
             y: smallWorld.position.y + smallWorld.normal.y * 0.02,
@@ -566,14 +614,6 @@ describe('KendamaInputAndDetector Module', () => {
             z: -smallWorld.normal.z * 0.5,
         };
 
-        // Frame 1: Valid for Big Cup (confirmationCount = 1)
-        const frame1 = detector.evaluateCatch(bigPos, bigVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
-        assert.equal(frame1.valid, true);
-        assert.equal(frame1.cupKey, CUP_IDS.BIG_CUP);
-        assert.equal(frame1.confirmationCount, 1);
-        assert.equal(frame1.confirmed, false);
-
-        // Frame 2: Valid for Small Cup (switches candidate cup)
         const frame2 = detector.evaluateCatch(smallPos, smallVel, CUP_IDS.SMALL_CUP, 1.016, 0.016);
         assert.equal(frame2.valid, true);
         assert.equal(frame2.cupKey, CUP_IDS.SMALL_CUP);
@@ -711,60 +751,73 @@ describe('KendamaInputAndDetector Module', () => {
     });
 
     it('20. switching candidate cups at the same timestamp cannot accidentally confirm a catch', () => {
-        const mockKen = createMockKenGroup();
+        const roll90Z = { x: 0.0, y: 0.0, z: Math.SQRT1_2, w: Math.SQRT1_2 };
+        const rollNeg90Z = { x: 0.0, y: 0.0, z: -Math.SQRT1_2, w: Math.SQRT1_2 };
+
+        const mockKen = createMockKenGroup({ x: 0.0, y: 1.25, z: -0.45 }, roll90Z);
         const detector = new KendamaInputAndDetector(mockKen);
 
-        const bigWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
-        const smallWorld = detector.getWorldCupTransform(CUP_IDS.SMALL_CUP);
+        const getBigVectors = () => {
+            setMockKenOrientation(mockKen, roll90Z);
+            const bigWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
+            const pos = {
+                x: bigWorld.position.x + bigWorld.normal.x * 0.02,
+                y: bigWorld.position.y + bigWorld.normal.y * 0.02,
+                z: bigWorld.position.z + bigWorld.normal.z * 0.02,
+            };
+            const vel = {
+                x: -bigWorld.normal.x * 0.5,
+                y: -bigWorld.normal.y * 0.5,
+                z: -bigWorld.normal.z * 0.5,
+            };
+            return { pos, vel };
+        };
 
-        const bigPos = {
-            x: bigWorld.position.x + bigWorld.normal.x * 0.02,
-            y: bigWorld.position.y + bigWorld.normal.y * 0.02,
-            z: bigWorld.position.z + bigWorld.normal.z * 0.02,
-        };
-        const bigVel = {
-            x: -bigWorld.normal.x * 0.5,
-            y: -bigWorld.normal.y * 0.5,
-            z: -bigWorld.normal.z * 0.5,
-        };
-
-        const smallPos = {
-            x: smallWorld.position.x + smallWorld.normal.x * 0.02,
-            y: smallWorld.position.y + smallWorld.normal.y * 0.02,
-            z: smallWorld.position.z + smallWorld.normal.z * 0.02,
-        };
-        const smallVel = {
-            x: -smallWorld.normal.x * 0.5,
-            y: -smallWorld.normal.y * 0.5,
-            z: -smallWorld.normal.z * 0.5,
+        const getSmallVectors = () => {
+            setMockKenOrientation(mockKen, rollNeg90Z);
+            const smallWorld = detector.getWorldCupTransform(CUP_IDS.SMALL_CUP);
+            const pos = {
+                x: smallWorld.position.x + smallWorld.normal.x * 0.02,
+                y: smallWorld.position.y + smallWorld.normal.y * 0.02,
+                z: smallWorld.position.z + smallWorld.normal.z * 0.02,
+            };
+            const vel = {
+                x: -smallWorld.normal.x * 0.5,
+                y: -smallWorld.normal.y * 0.5,
+                z: -smallWorld.normal.z * 0.5,
+            };
+            return { pos, vel };
         };
 
         // At timestamp 1.0, evaluate Big Cup (count 1, confirmed: false)
-        const res1 = detector.evaluateCatch(bigPos, bigVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
+        const big1 = getBigVectors();
+        const res1 = detector.evaluateCatch(big1.pos, big1.vel, CUP_IDS.BIG_CUP, 1.0, 0.016);
         assert.equal(res1.valid, true);
         assert.equal(res1.confirmationCount, 1);
         assert.equal(res1.confirmed, false);
 
         // At same timestamp 1.0, switch to Small Cup (resets count to 1, confirmed: false)
-        const res2 = detector.evaluateCatch(smallPos, smallVel, CUP_IDS.SMALL_CUP, 1.0, 0.016);
+        const small1 = getSmallVectors();
+        const res2 = detector.evaluateCatch(small1.pos, small1.vel, CUP_IDS.SMALL_CUP, 1.0, 0.016);
         assert.equal(res2.valid, true);
         assert.equal(res2.confirmationCount, 1);
         assert.equal(res2.confirmed, false);
 
         // At same timestamp 1.0, duplicate evaluation for Small Cup (count must hold at 1, confirmed: false)
-        const res3 = detector.evaluateCatch(smallPos, smallVel, CUP_IDS.SMALL_CUP, 1.0, 0.016);
+        const res3 = detector.evaluateCatch(small1.pos, small1.vel, CUP_IDS.SMALL_CUP, 1.0, 0.016);
         assert.equal(res3.valid, true);
         assert.equal(res3.confirmationCount, 1);
         assert.equal(res3.confirmed, false);
 
         // At same timestamp 1.0, switch back to Big Cup (resets count to 1, confirmed: false)
-        const res4 = detector.evaluateCatch(bigPos, bigVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
+        const big2 = getBigVectors();
+        const res4 = detector.evaluateCatch(big2.pos, big2.vel, CUP_IDS.BIG_CUP, 1.0, 0.016);
         assert.equal(res4.valid, true);
         assert.equal(res4.confirmationCount, 1);
         assert.equal(res4.confirmed, false);
 
         // Duplicate evaluation for Big Cup at same timestamp 1.0 (count must hold at 1, confirmed: false)
-        const res5 = detector.evaluateCatch(bigPos, bigVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
+        const res5 = detector.evaluateCatch(big2.pos, big2.vel, CUP_IDS.BIG_CUP, 1.0, 0.016);
         assert.equal(res5.valid, true);
         assert.equal(res5.confirmationCount, 1);
         assert.equal(res5.confirmed, false);
@@ -988,5 +1041,287 @@ describe('KendamaInputAndDetector Module', () => {
         assert.equal(confirmRes.valid, true);
         assert.equal(confirmRes.confirmed, true, 'Second genuine newer frame must confirm catch');
         assert.equal(confirmRes.confirmationCount, 2);
+    });
+});
+
+describe('Authoritative Geometry Catch Detection (Ken at origin)', () => {
+    const origin = { x: 0.0, y: 0.0, z: 0.0 };
+    const roll90Z = { x: 0.0, y: 0.0, z: Math.SQRT1_2, w: Math.SQRT1_2 };
+    const rollNeg90Z = { x: 0.0, y: 0.0, z: -Math.SQRT1_2, w: Math.SQRT1_2 };
+    const invert180X = { x: 1.0, y: 0.0, z: 0.0, w: 0.0 };
+    const upright = { x: 0.0, y: 0.0, z: 0.0, w: 1.0 };
+
+    it('Big cup rolled +90 degrees about Z, ball above world catch point moving down at 0.5 m/s returns CLEAN after 2 consecutive frames', () => {
+        const mockKen = createMockKenGroup(origin, roll90Z);
+        const detector = new KendamaInputAndDetector(mockKen);
+        const bigWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
+
+        // Distance 0.02m (within clean radius of 0.035m)
+        const ballPos = {
+            x: bigWorld.position.x,
+            y: bigWorld.position.y + 0.02,
+            z: bigWorld.position.z,
+        };
+        const ballVel = { x: 0.0, y: -0.5, z: 0.0 };
+
+        // Frame 1
+        const res1 = detector.evaluateCatch(ballPos, ballVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
+        assert.equal(res1.valid, true);
+        assert.equal(res1.catchType, 'clean');
+        assert.equal(res1.confirmationCount, 1);
+        assert.equal(res1.confirmed, false);
+
+        // Frame 2
+        const res2 = detector.evaluateCatch(ballPos, ballVel, CUP_IDS.BIG_CUP, 1.016, 0.016);
+        assert.equal(res2.valid, true);
+        assert.equal(res2.catchType, 'clean');
+        assert.equal(res2.confirmationCount, 2);
+        assert.equal(res2.confirmed, true);
+    });
+
+    it('Big cup, ball slightly farther (inside assist radius, outside clean radius) returns ASSISTED', () => {
+        const mockKen = createMockKenGroup(origin, roll90Z);
+        const detector = new KendamaInputAndDetector(mockKen);
+        const bigWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
+
+        // Clean radius is 0.035m, assist radius is 0.075m. Distance 0.050m is inside assist, outside clean.
+        const ballPos = {
+            x: bigWorld.position.x,
+            y: bigWorld.position.y + 0.050,
+            z: bigWorld.position.z,
+        };
+        const ballVel = { x: 0.0, y: -0.5, z: 0.0 };
+
+        const res = detector.evaluateCatch(ballPos, ballVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
+        assert.equal(res.valid, true);
+        assert.equal(res.catchType, 'assisted');
+    });
+
+    it('Big cup, ball moving away from opening returns NONE (approach_direction_invalid)', () => {
+        const mockKen = createMockKenGroup(origin, roll90Z);
+        const detector = new KendamaInputAndDetector(mockKen);
+        const bigWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
+
+        const ballPos = {
+            x: bigWorld.position.x,
+            y: bigWorld.position.y + 0.02,
+            z: bigWorld.position.z,
+        };
+        // Ball moving upward away from opening (+0.5 m/s, dot = +0.5 >= -0.2)
+        const ballVel = { x: 0.0, y: 0.5, z: 0.0 };
+
+        const res = detector.evaluateCatch(ballPos, ballVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
+        assert.equal(res.valid, false);
+        assert.equal(res.catchType, null);
+        assert.equal(res.reason, 'approach_direction_invalid');
+    });
+
+    it('Big cup, relative speed above maxRelSpeed returns NONE (relative_speed_exceeded)', () => {
+        const mockKen = createMockKenGroup(origin, roll90Z);
+        const detector = new KendamaInputAndDetector(mockKen, { maxRelativeSpeed: 2.0 });
+        const bigWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
+
+        const ballPos = {
+            x: bigWorld.position.x,
+            y: bigWorld.position.y + 0.02,
+            z: bigWorld.position.z,
+        };
+        // Relative speed 3.0 m/s > maxRelativeSpeed 2.0
+        const ballVel = { x: 0.0, y: -3.0, z: 0.0 };
+
+        const res = detector.evaluateCatch(ballPos, ballVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
+        assert.equal(res.valid, false);
+        assert.equal(res.catchType, null);
+        assert.equal(res.reason, 'relative_speed_exceeded');
+    });
+
+    it('Big cup, ball far outside assist radius returns NONE (out_of_range)', () => {
+        const mockKen = createMockKenGroup(origin, roll90Z);
+        const detector = new KendamaInputAndDetector(mockKen);
+        const bigWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
+
+        // Distance 0.150m > 0.075m assist radius
+        const ballPos = {
+            x: bigWorld.position.x,
+            y: bigWorld.position.y + 0.150,
+            z: bigWorld.position.z,
+        };
+        const ballVel = { x: 0.0, y: -0.5, z: 0.0 };
+
+        const res = detector.evaluateCatch(ballPos, ballVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
+        assert.equal(res.valid, false);
+        assert.equal(res.catchType, null);
+        assert.equal(res.reason, 'out_of_range');
+    });
+
+    it('Ken NOT rolled (cup facing sideways), ball above cup moving down returns NONE because alignment check fails', () => {
+        const mockKen = createMockKenGroup(origin, upright);
+        const detector = new KendamaInputAndDetector(mockKen);
+        const bigWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
+
+        // Big cup faces sideways along +X: normal is (1, 0, 0).
+        // Ball placed above the cup moving down: ballVel is (0, -0.5, 0).
+        const ballPos = {
+            x: bigWorld.position.x,
+            y: bigWorld.position.y + 0.02,
+            z: bigWorld.position.z,
+        };
+        const ballVel = { x: 0.0, y: -0.5, z: 0.0 };
+
+        const res = detector.evaluateCatch(ballPos, ballVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
+        assert.equal(res.valid, false);
+        assert.equal(res.catchType, null);
+        assert.equal(res.reason, 'approach_direction_invalid');
+    });
+
+    it('Small cup mirrored (roll -90 degrees) and Base cup inverted (roll 180 degrees) each returns CLEAN with correctly placed ball', () => {
+        // Part A: Small cup (roll -90° Z)
+        const mockKenSmall = createMockKenGroup(origin, rollNeg90Z);
+        const detectorSmall = new KendamaInputAndDetector(mockKenSmall);
+        const smallWorld = detectorSmall.getWorldCupTransform(CUP_IDS.SMALL_CUP);
+
+        const smallBallPos = {
+            x: smallWorld.position.x,
+            y: smallWorld.position.y + 0.02,
+            z: smallWorld.position.z,
+        };
+        const downVel = { x: 0.0, y: -0.5, z: 0.0 };
+
+        // Frame 1 & 2 for Small Cup
+        const sRes1 = detectorSmall.evaluateCatch(smallBallPos, downVel, CUP_IDS.SMALL_CUP, 1.0, 0.016);
+        assert.equal(sRes1.valid, true);
+        assert.equal(sRes1.catchType, 'clean');
+        assert.equal(sRes1.confirmed, false);
+
+        const sRes2 = detectorSmall.evaluateCatch(smallBallPos, downVel, CUP_IDS.SMALL_CUP, 1.016, 0.016);
+        assert.equal(sRes2.valid, true);
+        assert.equal(sRes2.catchType, 'clean');
+        assert.equal(sRes2.confirmed, true);
+
+        // Part B: Base cup (roll 180° X)
+        const mockKenBase = createMockKenGroup(origin, invert180X);
+        const detectorBase = new KendamaInputAndDetector(mockKenBase);
+        const baseWorld = detectorBase.getWorldCupTransform(CUP_IDS.BASE_CUP);
+
+        const baseBallPos = {
+            x: baseWorld.position.x,
+            y: baseWorld.position.y + 0.02,
+            z: baseWorld.position.z,
+        };
+
+        // Frame 1 & 2 for Base Cup
+        const bRes1 = detectorBase.evaluateCatch(baseBallPos, downVel, CUP_IDS.BASE_CUP, 1.0, 0.016);
+        assert.equal(bRes1.valid, true);
+        assert.equal(bRes1.catchType, 'clean');
+        assert.equal(bRes1.confirmed, false);
+
+        const bRes2 = detectorBase.evaluateCatch(baseBallPos, downVel, CUP_IDS.BASE_CUP, 1.016, 0.016);
+        assert.equal(bRes2.valid, true);
+        assert.equal(bRes2.catchType, 'clean');
+        assert.equal(bRes2.confirmed, true);
+    });
+
+    it('Spike with ken upright: ball above spike tip moving down returns CLEAN', () => {
+        const mockKenSpike = createMockKenGroup(origin, upright);
+        const detectorSpike = new KendamaInputAndDetector(mockKenSpike);
+        const spikeWorld = detectorSpike.getWorldCupTransform(CUP_IDS.SPIKE);
+
+        // Spike tip clean radius is 0.020m. Distance 0.015m is within clean radius.
+        const spikeBallPos = {
+            x: spikeWorld.position.x,
+            y: spikeWorld.position.y + 0.015,
+            z: spikeWorld.position.z,
+        };
+        const downVel = { x: 0.0, y: -0.5, z: 0.0 };
+
+        // Frame 1 & 2 for Spike
+        const spRes1 = detectorSpike.evaluateCatch(spikeBallPos, downVel, CUP_IDS.SPIKE, 1.0, 0.016);
+        assert.equal(spRes1.valid, true);
+        assert.equal(spRes1.catchType, 'clean');
+        assert.equal(spRes1.confirmed, false);
+
+        const spRes2 = detectorSpike.evaluateCatch(spikeBallPos, downVel, CUP_IDS.SPIKE, 1.016, 0.016);
+        assert.equal(spRes2.valid, true);
+        assert.equal(spRes2.catchType, 'clean');
+        assert.equal(spRes2.confirmed, true);
+    });
+
+    it('Big cup, ken rolled so cup normal is 35 degrees from world up returns CLEAN (derived 40 deg limit allows it)', () => {
+        // Roll around Z so cup normal (1,0,0) tilted 35° from world up (0,1,0): rotZ = 90° - 35° = 55°
+        const angleRad = (90.0 - 35.0) * (Math.PI / 180.0);
+        const quat35 = { x: 0.0, y: 0.0, z: Math.sin(angleRad / 2), w: Math.cos(angleRad / 2) };
+        const mockKen = createMockKenGroup(origin, quat35);
+        const detector = new KendamaInputAndDetector(mockKen);
+        const bigWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
+
+        // Verify cup normal is tilted exactly 35° from world up
+        const tiltDeg = Math.acos(bigWorld.normal.y) * (180.0 / Math.PI);
+        assert.ok(Math.abs(tiltDeg - 35.0) < 1e-4);
+
+        const ballPos = {
+            x: bigWorld.position.x,
+            y: bigWorld.position.y + 0.02,
+            z: bigWorld.position.z,
+        };
+        const downVel = { x: 0.0, y: -0.5, z: 0.0 };
+
+        // Frame 1
+        const res1 = detector.evaluateCatch(ballPos, downVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
+        assert.equal(res1.valid, true);
+        assert.equal(res1.catchType, 'clean');
+        assert.equal(res1.confirmed, false);
+
+        // Frame 2
+        const res2 = detector.evaluateCatch(ballPos, downVel, CUP_IDS.BIG_CUP, 1.016, 0.016);
+        assert.equal(res2.valid, true);
+        assert.equal(res2.catchType, 'clean');
+        assert.equal(res2.confirmed, true);
+    });
+
+    it('Big cup, ken rolled so cup normal is 45 degrees from world up returns NONE (exceeds 40 deg limit)', () => {
+        // Roll around Z so cup normal (1,0,0) tilted 45° from world up (0,1,0): rotZ = 90° - 45° = 45°
+        const angleRad = (90.0 - 45.0) * (Math.PI / 180.0);
+        const quat45 = { x: 0.0, y: 0.0, z: Math.sin(angleRad / 2), w: Math.cos(angleRad / 2) };
+        const mockKen = createMockKenGroup(origin, quat45);
+        const detector = new KendamaInputAndDetector(mockKen);
+        const bigWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
+
+        // Verify cup normal is tilted exactly 45° from world up
+        const tiltDeg = Math.acos(bigWorld.normal.y) * (180.0 / Math.PI);
+        assert.ok(Math.abs(tiltDeg - 45.0) < 1e-4);
+
+        const ballPos = {
+            x: bigWorld.position.x,
+            y: bigWorld.position.y + 0.02,
+            z: bigWorld.position.z,
+        };
+        const downVel = { x: 0.0, y: -0.5, z: 0.0 };
+
+        const res = detector.evaluateCatch(ballPos, downVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
+        assert.equal(res.valid, false);
+        assert.equal(res.catchType, null);
+        assert.equal(res.reason, 'cup_orientation_invalid');
+    });
+
+    it('orientation threshold used for each cup equals Math.acos(minDot) in degrees read from cupConfigs', () => {
+        const mockKen = createMockKenGroup(origin, upright);
+        const detector = new KendamaInputAndDetector(mockKen);
+
+        const cups = [CUP_IDS.BIG_CUP, CUP_IDS.SMALL_CUP, CUP_IDS.BASE_CUP, CUP_IDS.SPIKE];
+        for (const cupId of cups) {
+            const config = getCupConfig(cupId);
+            const expectedDeg = Math.acos(config.minDot) * (180.0 / Math.PI);
+            const threshold = detector.orientationThresholds[cupId];
+
+            assert.ok(threshold, `Threshold should exist for cup ${cupId}`);
+            assert.ok(
+                Math.abs(threshold.maxAngleDeg - expectedDeg) < 1e-6,
+                `Expected ${cupId} maxAngleDeg to equal Math.acos(minDot) in deg (~${expectedDeg}), got ${threshold.maxAngleDeg}`
+            );
+            assert.ok(
+                Math.abs(threshold.minCos - config.minDot) < 1e-6,
+                `Expected ${cupId} minCos to equal config.minDot (${config.minDot}), got ${threshold.minCos}`
+            );
+        }
     });
 });

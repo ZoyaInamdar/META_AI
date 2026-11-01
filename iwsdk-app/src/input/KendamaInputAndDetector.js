@@ -19,7 +19,7 @@
  *    - Position within clean or assisted catch radius.
  *    - Relative velocity speed threshold.
  *    - Approach direction into cup opening (dot product < -0.2).
- *    - Cup orientation against world up (30°, 25°, 35°, 18°).
+ *    - Cup orientation against world up (derived from cupConfigs minDot).
  *    - 2-consecutive-frame temporal hysteresis confirmation.
  *
  * Architectural Restrictions:
@@ -40,41 +40,44 @@ export { BALL_RADIUS };
 /**
  * Standard catch radii thresholds for each target [meters].
  */
-export const CATCH_RADII = Object.freeze({
+const rawCatchRadii = {
     [CUP_IDS.BIG_CUP]: Object.freeze({ clean: 0.035, assisted: 0.075 }),
     [CUP_IDS.SMALL_CUP]: Object.freeze({ clean: 0.030, assisted: 0.065 }),
     [CUP_IDS.BASE_CUP]: Object.freeze({ clean: 0.040, assisted: 0.080 }),
     [CUP_IDS.SPIKE]: Object.freeze({ clean: 0.020, assisted: 0.045 }),
-});
+};
+Object.defineProperty(rawCatchRadii, 'bigCup', { get() { return rawCatchRadii[CUP_IDS.BIG_CUP]; }, enumerable: false });
+Object.defineProperty(rawCatchRadii, 'smallCup', { get() { return rawCatchRadii[CUP_IDS.SMALL_CUP]; }, enumerable: false });
+Object.defineProperty(rawCatchRadii, 'baseCup', { get() { return rawCatchRadii[CUP_IDS.BASE_CUP]; }, enumerable: false });
+export const CATCH_RADII = Object.freeze(rawCatchRadii);
 
 /**
  * Maximum acceptable misalignment angle with world up (0, 1, 0) in degrees.
  *
- * Note: Base Cup requires the Ken to be held in an inverted orientation
- * so the bottom cup faces upward.
+ * Derived directly from cupConfigs (single source of truth).
+ * Base Cup requires the Ken to be held in an inverted orientation so the bottom cup faces upward.
  */
-export const ORIENTATION_THRESHOLDS = Object.freeze({
-    [CUP_IDS.BIG_CUP]: Object.freeze({
-        maxAngleDeg: 30.0,
-        maxAngleRad: 30.0 * (Math.PI / 180),
-        minCos: Math.cos(30.0 * (Math.PI / 180)),
-    }),
-    [CUP_IDS.SMALL_CUP]: Object.freeze({
-        maxAngleDeg: 25.0,
-        maxAngleRad: 25.0 * (Math.PI / 180),
-        minCos: Math.cos(25.0 * (Math.PI / 180)),
-    }),
-    [CUP_IDS.BASE_CUP]: Object.freeze({
-        maxAngleDeg: 35.0,
-        maxAngleRad: 35.0 * (Math.PI / 180),
-        minCos: Math.cos(35.0 * (Math.PI / 180)),
-    }),
-    [CUP_IDS.SPIKE]: Object.freeze({
-        maxAngleDeg: 18.0,
-        maxAngleRad: 18.0 * (Math.PI / 180),
-        minCos: Math.cos(18.0 * (Math.PI / 180)),
-    }),
-});
+function buildOrientationThresholds() {
+    const thresholds = {};
+    const cupIdList = [CUP_IDS.BIG_CUP, CUP_IDS.SMALL_CUP, CUP_IDS.BASE_CUP, CUP_IDS.SPIKE];
+    for (const cupId of cupIdList) {
+        const config = getCupConfig(cupId);
+        const minDot = config?.minDot ?? 1.0;
+        const maxAngleRad = Math.acos(minDot);
+        const maxAngleDeg = maxAngleRad * (180.0 / Math.PI);
+        thresholds[cupId] = Object.freeze({
+            maxAngleDeg,
+            maxAngleRad,
+            minCos: minDot,
+        });
+    }
+    Object.defineProperty(thresholds, 'bigCup', { get() { return thresholds[CUP_IDS.BIG_CUP]; }, enumerable: false });
+    Object.defineProperty(thresholds, 'smallCup', { get() { return thresholds[CUP_IDS.SMALL_CUP]; }, enumerable: false });
+    Object.defineProperty(thresholds, 'baseCup', { get() { return thresholds[CUP_IDS.BASE_CUP]; }, enumerable: false });
+    return Object.freeze(thresholds);
+}
+
+export const ORIENTATION_THRESHOLDS = buildOrientationThresholds();
 
 /**
  * Maximum allowed dot product between relative velocity and cup world normal.
