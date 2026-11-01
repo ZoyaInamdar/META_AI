@@ -20,31 +20,35 @@ import {
     getCupConfig,
 } from './cupConfigs.js';
 
-describe('cupConfigs Module', () => {
+describe('cupConfigs Module (Authoritative)', () => {
     it('defines the standard ball radius', () => {
         assert.equal(BALL_RADIUS, 0.03, 'BALL_RADIUS must be 0.03 meters (3cm radius)');
     });
 
-    it('defines all four required Kendama scoring targets', () => {
-        assert.equal(CUP_IDS.BIG_CUP, 'bigCup');
-        assert.equal(CUP_IDS.SMALL_CUP, 'smallCup');
-        assert.equal(CUP_IDS.BASE_CUP, 'baseCup');
+    it('defines all four required Kendama scoring targets matching Person B keys', () => {
+        assert.equal(CUP_IDS.BIG_CUP, 'big');
+        assert.equal(CUP_IDS.SMALL_CUP, 'small');
+        assert.equal(CUP_IDS.BASE_CUP, 'base');
         assert.equal(CUP_IDS.SPIKE, 'spike');
 
-        assert.ok(CUP_CONFIGS.bigCup, 'Big Cup configuration must exist');
-        assert.ok(CUP_CONFIGS.smallCup, 'Small Cup configuration must exist');
-        assert.ok(CUP_CONFIGS.baseCup, 'Base Cup configuration must exist');
-        assert.ok(CUP_CONFIGS.spike, 'Spike configuration must exist');
+        assert.ok(CUP_CONFIGS.big, 'Big Cup configuration must exist under "big"');
+        assert.ok(CUP_CONFIGS.small, 'Small Cup configuration must exist under "small"');
+        assert.ok(CUP_CONFIGS.base, 'Base Cup configuration must exist under "base"');
+        assert.ok(CUP_CONFIGS.spike, 'Spike configuration must exist under "spike"');
 
         assert.equal(ALL_CUPS.length, 4, 'ALL_CUPS must contain exactly 4 configurations');
     });
 
     it('retrieves configurations using getCupConfig(id)', () => {
-        const big = getCupConfig('bigCup');
-        assert.equal(big?.id, 'bigCup');
+        const big = getCupConfig('big');
+        assert.equal(big?.id, 'big');
 
         const spike = getCupConfig('spike');
         assert.equal(spike?.id, 'spike');
+
+        // Backward compatibility with legacy camelCase names
+        const bigLegacy = getCupConfig('bigCup');
+        assert.equal(bigLegacy?.id, 'big');
 
         const nonexistent = getCupConfig('unknown_cup');
         assert.equal(nonexistent, undefined);
@@ -59,12 +63,12 @@ describe('cupConfigs Module', () => {
         // Nested property mutation must fail
         assert.throws(() => {
             // @ts-ignore
-            CUP_CONFIGS.bigCup.cleanCatchRadius = 999;
+            CUP_CONFIGS.big.cleanCatchRadius = 999;
         }, TypeError);
 
         assert.throws(() => {
             // @ts-ignore
-            CUP_CONFIGS.bigCup.position.x = 999;
+            CUP_CONFIGS.big.position.x = 999;
         }, TypeError);
 
         assert.throws(() => {
@@ -74,25 +78,25 @@ describe('cupConfigs Module', () => {
 
         assert.throws(() => {
             // @ts-ignore
-            CUP_CONFIGS.bigCup.rimRadius = 999;
+            CUP_CONFIGS.big.rimRadius = 999;
         }, TypeError);
     });
 
     it('verifies correct cup geometry (rimRadius, depth, seatDepth)', () => {
         // Big Cup
-        assert.equal(CUP_CONFIGS.bigCup.rimRadius, 0.045);
-        assert.equal(CUP_CONFIGS.bigCup.depth, 0.03);
-        assert.equal(CUP_CONFIGS.bigCup.seatDepth, 0.01);
+        assert.equal(CUP_CONFIGS.big.rimRadius, 0.045);
+        assert.equal(CUP_CONFIGS.big.depth, 0.03);
+        assert.equal(CUP_CONFIGS.big.seatDepth, 0.01);
 
         // Small Cup
-        assert.equal(CUP_CONFIGS.smallCup.rimRadius, 0.040);
-        assert.equal(CUP_CONFIGS.smallCup.depth, 0.03);
-        assert.equal(CUP_CONFIGS.smallCup.seatDepth, 0.01);
+        assert.equal(CUP_CONFIGS.small.rimRadius, 0.040);
+        assert.equal(CUP_CONFIGS.small.depth, 0.03);
+        assert.equal(CUP_CONFIGS.small.seatDepth, 0.01);
 
         // Base Cup
-        assert.equal(CUP_CONFIGS.baseCup.rimRadius, 0.042);
-        assert.equal(CUP_CONFIGS.baseCup.depth, 0.03);
-        assert.equal(CUP_CONFIGS.baseCup.seatDepth, 0.01);
+        assert.equal(CUP_CONFIGS.base.rimRadius, 0.042);
+        assert.equal(CUP_CONFIGS.base.depth, 0.03);
+        assert.equal(CUP_CONFIGS.base.seatDepth, 0.01);
 
         // Spike must NOT have cup rim geometry properties
         assert.equal(CUP_CONFIGS.spike.rimRadius, undefined);
@@ -119,31 +123,31 @@ describe('cupConfigs Module', () => {
         }
     });
 
-    it('verifies that Big and Small Cup normals follow the upright-tilted convention', () => {
-        const big = CUP_CONFIGS.bigCup.normal;
-        const small = CUP_CONFIGS.smallCup.normal;
+    it('verifies that Big and Small Cup normals follow the agreed corrected convention', () => {
+        const big = CUP_CONFIGS.big.normal;
+        const small = CUP_CONFIGS.small.normal;
 
-        // Big cup tilts outward (+X) and upward (+Y)
-        assert.ok(big.x > 0.3, 'Big Cup normal.x should be positive (~0.33)');
-        assert.ok(big.y > 0.9, 'Big Cup normal.y should be positive (~0.944)');
+        // Big cup tilts outward (+X) and slightly upward (+Y): (0.944, 0.330, 0)
+        assert.ok(big.x > 0.9, `Big Cup normal.x (${big.x}) should be positive (~0.944)`);
+        assert.ok(big.y > 0.3, `Big Cup normal.y (${big.y}) should be positive (~0.330)`);
         assert.equal(big.z, 0.0, 'Big Cup normal.z should be 0');
 
-        // Verify ratio matches 0.33 / 0.944 within floating point tolerance
-        const expectedRatio = 0.33 / 0.944;
+        // Verify ratio matches 0.944 / 0.330 within floating point tolerance
+        const expectedRatio = 0.944 / 0.330;
         const actualBigRatio = big.x / big.y;
         assert.ok(
-            Math.abs(actualBigRatio - expectedRatio) < 1e-5,
+            Math.abs(actualBigRatio - expectedRatio) < 1e-4,
             `Big Cup normal x/y ratio (${actualBigRatio}) must match expected (${expectedRatio})`
         );
 
-        // Small cup tilts outward (-X) and upward (+Y)
-        assert.ok(small.x < -0.3, 'Small Cup normal.x should be negative (~ -0.33)');
-        assert.ok(small.y > 0.9, 'Small Cup normal.y should be positive (~0.944)');
+        // Small cup tilts outward (-X) and slightly upward (+Y): (-0.944, 0.330, 0)
+        assert.ok(small.x < -0.9, `Small Cup normal.x (${small.x}) should be negative (~ -0.944)`);
+        assert.ok(small.y > 0.3, `Small Cup normal.y (${small.y}) should be positive (~0.330)`);
         assert.equal(small.z, 0.0, 'Small Cup normal.z should be 0');
 
         const actualSmallRatio = -small.x / small.y;
         assert.ok(
-            Math.abs(actualSmallRatio - expectedRatio) < 1e-5,
+            Math.abs(actualSmallRatio - expectedRatio) < 1e-4,
             `Small Cup normal -x/y ratio (${actualSmallRatio}) must match expected (${expectedRatio})`
         );
     });
@@ -155,9 +159,9 @@ describe('cupConfigs Module', () => {
         assert.equal(CUP_CONFIGS.spike.normal.z, 0.0);
 
         // Base cup points straight down (-Y)
-        assert.equal(CUP_CONFIGS.baseCup.normal.x, 0.0);
-        assert.equal(CUP_CONFIGS.baseCup.normal.y, -1.0);
-        assert.equal(CUP_CONFIGS.baseCup.normal.z, 0.0);
+        assert.equal(CUP_CONFIGS.base.normal.x, 0.0);
+        assert.equal(CUP_CONFIGS.base.normal.y, -1.0);
+        assert.equal(CUP_CONFIGS.base.normal.z, 0.0);
     });
 
     it('ensures valid catch radii where assisted radius > clean radius', () => {
@@ -172,7 +176,7 @@ describe('cupConfigs Module', () => {
 
         // Spike should have the smallest clean catch radius due to hole precision
         assert.ok(
-            CUP_CONFIGS.spike.cleanCatchRadius < CUP_CONFIGS.bigCup.cleanCatchRadius,
+            CUP_CONFIGS.spike.cleanCatchRadius < CUP_CONFIGS.big.cleanCatchRadius,
             'Spike clean catch radius should be tighter than Big Cup'
         );
     });

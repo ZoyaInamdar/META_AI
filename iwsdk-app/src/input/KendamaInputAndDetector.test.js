@@ -21,7 +21,7 @@ import {
     REQUIRED_CONFIRMATION_FRAMES,
     UNRESOLVED_DEFAULT_MAX_RELATIVE_SPEED,
 } from './KendamaInputAndDetector.js';
-import { CUP_IDS, CUP_CONFIGS, getCupConfig } from '../game/cupConfigs.js';
+import { CUP_IDS, CUP_CONFIGS, getCupConfig } from './cupConfigs.js';
 
 /**
  * Creates a mock Three.js Object3D / Group matching Person B's gameplayKenGroup.

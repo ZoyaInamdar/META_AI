@@ -30,7 +30,7 @@
  *   objects in Node.js unit tests.
  */
 
-import { BALL_RADIUS, CUP_IDS, getCupConfig } from '../game/cupConfigs.js';
+import { BALL_RADIUS, CUP_IDS, getCupConfig } from './cupConfigs.js';
 
 /**
  * Re-export BALL_RADIUS for consumers of this detector.
