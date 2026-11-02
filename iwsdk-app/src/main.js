@@ -268,6 +268,41 @@ export class DefaultWorldRenderer {
 }
 
 // ============================================================================
+// STANDALONE ACCUMULATOR STEPPER
+// ============================================================================
+
+/**
+ * Standalone fixed accumulator stepper helper.
+ * Advances physics in fixed delta increments without drift.
+ *
+ * @param {any} orbitalEngine - Engine implementing .step(fixedDelta)
+ * @param {number} accumulator - Current accumulated time in seconds
+ * @param {number} [fixedDelta=PHYSICS_TIMESTEP.FIXED_DELTA] - Substep delta in seconds
+ * @param {number} [maxFrames=PHYSICS_TIMESTEP.MAX_ACCUMULATED_FRAMES] - Max substeps to execute
+ * @returns {{ remainingAccumulator: number, stepsExecuted: number }}
+ */
+export function fixedAccumulatorStep(
+  orbitalEngine,
+  accumulator,
+  fixedDelta = PHYSICS_TIMESTEP.FIXED_DELTA ?? (1 / 120),
+  maxFrames = PHYSICS_TIMESTEP.MAX_ACCUMULATED_FRAMES ?? 5
+) {
+  let acc = accumulator;
+  let steps = 0;
+  while (acc >= fixedDelta && steps < maxFrames) {
+    if (orbitalEngine && typeof orbitalEngine.step === 'function') {
+      orbitalEngine.step(fixedDelta);
+    }
+    acc -= fixedDelta;
+    steps++;
+  }
+  if (steps >= maxFrames) {
+    acc = 0.0;
+  }
+  return { remainingAccumulator: acc, stepsExecuted: steps };
+}
+
+// ============================================================================
 // GAME PIPELINE ENGINE
 // ============================================================================
 
@@ -439,6 +474,22 @@ export class GamePipeline {
   }
 }
 
+/**
+ * Global default GamePipeline singleton.
+ */
+export const defaultPipeline = new GamePipeline();
+
+/**
+ * Standalone tick function delegating to the default pipeline.
+ *
+ * @param {number} timestamp
+ * @param {any} [xrFrame=null]
+ * @param {number} [forcedDelta=null]
+ */
+export function tick(timestamp, xrFrame = null, forcedDelta = null) {
+  return defaultPipeline.tick(timestamp, xrFrame, forcedDelta);
+}
+
 // ============================================================================
 // BOOTLOADER / INIT GAME
 // ============================================================================
@@ -482,4 +533,3 @@ export function initGame(options = {}) {
     }
   };
 }
-

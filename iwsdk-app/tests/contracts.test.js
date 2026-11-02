@@ -7,12 +7,11 @@
  * ============================================================================
  * Unit Tests for Interfaces & Data Contracts
  * Role: Person B (The Physics & Mission Lead)
- * Verification for Step 0.1: TargetState, CupKey, TrickType, Events contracts
+ * Verification for Step 0.1 under Vitest
  * ============================================================================
  */
 
-import { describe, it } from 'node:test';
-import assert from 'node:assert/strict';
+import { describe, it, expect } from 'vitest';
 import {
   CupKey,
   TargetCup,
@@ -34,78 +33,78 @@ import { EventBus, eventBus } from '../src/contracts/EventBus.js';
 describe('Contracts & Interfaces Verification (Step 0.1)', () => {
   describe('CupKey & TargetCup Constants', () => {
     it('defines canonical cup keys matching "big", "small", "base", and "spike"', () => {
-      assert.equal(CupKey.BIG, 'big');
-      assert.equal(CupKey.SMALL, 'small');
-      assert.equal(CupKey.BASE, 'base');
-      assert.equal(CupKey.SPIKE, 'spike');
+      expect(CupKey.BIG).toBe('big');
+      expect(CupKey.SMALL).toBe('small');
+      expect(CupKey.BASE).toBe('base');
+      expect(CupKey.SPIKE).toBe('spike');
     });
 
     it('CupKey is frozen against mutations', () => {
-      assert.ok(Object.isFrozen(CupKey));
+      expect(Object.isFrozen(CupKey)).toBe(true);
     });
 
     it('TargetCup alias maintains backward compatibility', () => {
-      assert.equal(TargetCup.BIG, 'big');
-      assert.equal(TargetCup.SMALL, 'small');
-      assert.equal(TargetCup.BASE, 'base');
-      assert.equal(TargetCup.SPIKE, 'spike');
+      expect(TargetCup.BIG).toBe('big');
+      expect(TargetCup.SMALL).toBe('small');
+      expect(TargetCup.BASE).toBe('base');
+      expect(TargetCup.SPIKE).toBe('spike');
     });
   });
 
   describe('TrickType Constants', () => {
     it('defines trick types across all 5 epochs', () => {
-      assert.equal(TrickType.SINGLE, 'single');
-      assert.equal(TrickType.ALTERNATE, 'alternate');
-      assert.equal(TrickType.AROUND, 'around');
-      assert.equal(TrickType.SPIKE, 'spike');
+      expect(TrickType.SINGLE).toBe('single');
+      expect(TrickType.ALTERNATE).toBe('alternate');
+      expect(TrickType.AROUND).toBe('around');
+      expect(TrickType.SPIKE).toBe('spike');
     });
 
     it('TrickType is frozen against mutations', () => {
-      assert.ok(Object.isFrozen(TrickType));
+      expect(Object.isFrozen(TrickType)).toBe(true);
     });
   });
 
   describe('Events Map', () => {
     it('defines Events.TARGET as "target"', () => {
-      assert.equal(Events.TARGET, 'target');
+      expect(Events.TARGET).toBe('target');
     });
 
     it('defines all required cross-system event bus symbols', () => {
-      assert.equal(Events.SCORE, 'score');
-      assert.equal(Events.MISS, 'miss');
-      assert.equal(Events.CATCH, 'catch');
-      assert.equal(Events.BALL, 'ball');
-      assert.equal(Events.CADENCE, 'cadence');
-      assert.equal(Events.TARGET, 'target');
-      assert.equal(Events.MISSION, 'mission');
-      assert.equal(Events.PHYSICS, 'physics');
-      assert.equal(Events.PLANET, 'planet');
+      expect(Events.SCORE).toBe('score');
+      expect(Events.MISS).toBe('miss');
+      expect(Events.CATCH).toBe('catch');
+      expect(Events.BALL).toBe('ball');
+      expect(Events.CADENCE).toBe('cadence');
+      expect(Events.TARGET).toBe('target');
+      expect(Events.MISSION).toBe('mission');
+      expect(Events.PHYSICS).toBe('physics');
+      expect(Events.PLANET).toBe('planet');
     });
 
     it('Events is frozen against mutations', () => {
-      assert.ok(Object.isFrozen(Events));
+      expect(Object.isFrozen(Events)).toBe(true);
     });
   });
 
   describe('TargetState Contract', () => {
     it('new TargetState() initializes with default { cupKey: "big", trick: "single", sequenceIndex: 0 }', () => {
       const target = new TargetState();
-      assert.equal(target.cupKey, 'big');
-      assert.equal(target.trick, 'single');
-      assert.equal(target.sequenceIndex, 0);
+      expect(target.cupKey).toBe('big');
+      expect(target.trick).toBe('single');
+      expect(target.sequenceIndex).toBe(0);
     });
 
     it('exposes exactly { cupKey, trick, sequenceIndex } as own enumerable properties', () => {
       const target = new TargetState(CupKey.SMALL, TrickType.ALTERNATE, 3);
-      assert.equal(target.cupKey, 'small');
-      assert.equal(target.trick, 'alternate');
-      assert.equal(target.sequenceIndex, 3);
-      assert.deepEqual(Object.keys(target), ['cupKey', 'trick', 'sequenceIndex']);
+      expect(target.cupKey).toBe('small');
+      expect(target.trick).toBe('alternate');
+      expect(target.sequenceIndex).toBe(3);
+      expect(Object.keys(target)).toEqual(['cupKey', 'trick', 'sequenceIndex']);
     });
 
     it('provides backward-compatible targetCup getter', () => {
       const target = new TargetState(CupKey.BASE, TrickType.AROUND, 2);
-      assert.equal(target.targetCup, 'base');
+      expect(target.targetCup).toBe('base');
     });
 
     it('supports Around the World sequence progression', () => {
@@ -113,17 +112,17 @@ describe('Contracts & Interfaces Verification (Step 0.1)', () => {
       const step2 = new TargetState(CupKey.SMALL, TrickType.AROUND, 1);
       const step3 = new TargetState(CupKey.BASE, TrickType.AROUND, 2);
 
-      assert.equal(step1.cupKey, 'big');
-      assert.equal(step2.cupKey, 'small');
-      assert.equal(step3.cupKey, 'base');
-      assert.equal(step3.sequenceIndex, 2);
+      expect(step1.cupKey).toBe('big');
+      expect(step2.cupKey).toBe('small');
+      expect(step3.cupKey).toBe('base');
+      expect(step3.sequenceIndex).toBe(2);
     });
 
     it('supports Chapter 5 Spike technique', () => {
       const spikeTarget = new TargetState(CupKey.SPIKE, TrickType.SPIKE, 4);
-      assert.equal(spikeTarget.cupKey, 'spike');
-      assert.equal(spikeTarget.trick, 'spike');
-      assert.equal(spikeTarget.sequenceIndex, 4);
+      expect(spikeTarget.cupKey).toBe('spike');
+      expect(spikeTarget.trick).toBe('spike');
+      expect(spikeTarget.sequenceIndex).toBe(4);
     });
   });
 
@@ -139,10 +138,10 @@ describe('Contracts & Interfaces Verification (Step 0.1)', () => {
       const target = new TargetState(CupKey.SMALL, TrickType.ALTERNATE, 1);
       bus.emit(Events.TARGET, target);
 
-      assert.ok(received);
-      assert.equal(received.cupKey, 'small');
-      assert.equal(received.trick, 'alternate');
-      assert.equal(received.sequenceIndex, 1);
+      expect(received).toBeTruthy();
+      expect(received.cupKey).toBe('small');
+      expect(received.trick).toBe('alternate');
+      expect(received.sequenceIndex).toBe(1);
     });
 
     it('supports unsubscribe callback', () => {
@@ -154,37 +153,37 @@ describe('Contracts & Interfaces Verification (Step 0.1)', () => {
       });
 
       bus.emit(Events.CADENCE, 1.75);
-      assert.equal(callCount, 1);
+      expect(callCount).toBe(1);
 
       unsubscribe();
       bus.emit(Events.CADENCE, 1.75);
-      assert.equal(callCount, 1);
+      expect(callCount).toBe(1);
     });
   });
 
   describe('Preserved Data Contracts', () => {
     it('BallState initializes with default position, velocity, and seated mode', () => {
       const ball = new BallState();
-      assert.deepEqual(ball.position, { x: 0, y: 0, z: 0 });
-      assert.deepEqual(ball.velocity, { x: 0, y: 0, z: 0 });
-      assert.equal(ball.mode, BallMode.SEATED);
+      expect(ball.position).toEqual({ x: 0, y: 0, z: 0 });
+      expect(ball.velocity).toEqual({ x: 0, y: 0, z: 0 });
+      expect(ball.mode).toBe(BallMode.SEATED);
     });
 
     it('CatchType defines CLEAN, ASSISTED, MISS, and NONE', () => {
-      assert.equal(CatchType.CLEAN, 'CLEAN');
-      assert.equal(CatchType.ASSISTED, 'ASSISTED');
-      assert.equal(CatchType.MISS, 'MISS');
-      assert.equal(CatchType.NONE, 'NONE');
+      expect(CatchType.CLEAN).toBe('CLEAN');
+      expect(CatchType.ASSISTED).toBe('ASSISTED');
+      expect(CatchType.MISS).toBe('MISS');
+      expect(CatchType.NONE).toBe('NONE');
     });
 
     it('ScoreEvent supports both positional and object initialization with aliases', () => {
       // Positional
       const scorePos = new ScoreEvent('evt_1', CatchType.CLEAN, 28, 2);
-      assert.equal(scorePos.eventId, 'evt_1');
-      assert.equal(scorePos.catchType, 'CLEAN');
-      assert.equal(scorePos.awardedEnergy, 28);
-      assert.equal(scorePos.streak, 2);
-      assert.equal(scorePos.currentStreak, 2);
+      expect(scorePos.eventId).toBe('evt_1');
+      expect(scorePos.catchType).toBe('CLEAN');
+      expect(scorePos.awardedEnergy).toBe(28);
+      expect(scorePos.streak).toBe(2);
+      expect(scorePos.currentStreak).toBe(2);
 
       // Object
       const scoreObj = new ScoreEvent({
@@ -195,57 +194,57 @@ describe('Contracts & Interfaces Verification (Step 0.1)', () => {
         totalEnergy: 74,
         currentStreak: 3
       });
-      assert.equal(scoreObj.eventId, 'evt_2');
-      assert.equal(scoreObj.awardedEnergy, 46);
-      assert.equal(scoreObj.totalEnergy, 74);
-      assert.equal(scoreObj.currentStreak, 3);
-      assert.equal(scoreObj.streak, 3);
+      expect(scoreObj.eventId).toBe('evt_2');
+      expect(scoreObj.awardedEnergy).toBe(46);
+      expect(scoreObj.totalEnergy).toBe(74);
+      expect(scoreObj.currentStreak).toBe(3);
+      expect(scoreObj.streak).toBe(3);
     });
 
     it('MissionState defaults to Chapter 1 with 100 energy target and aliases', () => {
       const mission = new MissionState();
-      assert.equal(mission.chapter, 1);
-      assert.equal(mission.cosmicEnergy, 0);
-      assert.equal(mission.targetEnergy, 100);
-      assert.equal(mission.chapterTargetEnergy, 100);
-      assert.equal(mission.milestoneReached, false);
-      assert.equal(mission.milestoneUnlocked, false);
-      assert.equal(mission.activeIntervention, null);
+      expect(mission.chapter).toBe(1);
+      expect(mission.cosmicEnergy).toBe(0);
+      expect(mission.targetEnergy).toBe(100);
+      expect(mission.chapterTargetEnergy).toBe(100);
+      expect(mission.milestoneReached).toBe(false);
+      expect(mission.milestoneUnlocked).toBe(false);
+      expect(mission.activeIntervention).toBeNull();
     });
 
     it('PlanetState tracks all 5 chapter planetary evolution properties with aliases', () => {
       const planet = new PlanetState();
-      assert.equal(planet.kintsugiGlow, 0.0);
-      assert.equal(planet.kintsugiVeinGlow, 0.0);
-      assert.equal(planet.atmosphereDensity, 0.0);
-      assert.equal(planet.oceanFill, 0.0);
-      assert.equal(planet.oceanFillLevel, 0.0);
-      assert.equal(planet.ringAlpha, 0.0);
-      assert.equal(planet.ringFormationAlpha, 0.0);
-      assert.equal(planet.shieldCharge, 0.0);
-      assert.equal(planet.scarsCount, 0);
-      assert.equal(planet.scars, 0);
-      assert.equal(planet.goldIgnited, false);
-      assert.equal(planet.isGoldIgnited, false);
+      expect(planet.kintsugiGlow).toBe(0.0);
+      expect(planet.kintsugiVeinGlow).toBe(0.0);
+      expect(planet.atmosphereDensity).toBe(0.0);
+      expect(planet.oceanFill).toBe(0.0);
+      expect(planet.oceanFillLevel).toBe(0.0);
+      expect(planet.ringAlpha).toBe(0.0);
+      expect(planet.ringFormationAlpha).toBe(0.0);
+      expect(planet.shieldCharge).toBe(0.0);
+      expect(planet.scarsCount).toBe(0);
+      expect(planet.scars).toBe(0);
+      expect(planet.goldIgnited).toBe(false);
+      expect(planet.isGoldIgnited).toBe(false);
     });
 
     it('PhysicsState tracks simulation time, substeps, and bodies array with aliases', () => {
       const physics = new PhysicsState();
-      assert.equal(physics.simTime, 0.0);
-      assert.equal(physics.simulationTime, 0.0);
-      assert.equal(physics.substeps, 1);
-      assert.equal(physics.substepCount, 1);
-      assert.deepEqual(physics.bodies, []);
+      expect(physics.simTime).toBe(0.0);
+      expect(physics.simulationTime).toBe(0.0);
+      expect(physics.substeps).toBe(1);
+      expect(physics.substepCount).toBe(1);
+      expect(physics.bodies).toEqual([]);
     });
 
     it('KendamaInputState and CatchResult initialize with defaults', () => {
       const input = new KendamaInputState();
-      assert.equal(input.isTrackingValid, false);
-      assert.equal(input.trackingConfidence, 1.0);
+      expect(input.isTrackingValid).toBe(false);
+      expect(input.trackingConfidence).toBe(1.0);
 
       const catchResult = new CatchResult();
-      assert.equal(catchResult.type, CatchType.NONE);
-      assert.equal(catchResult.cupKey, 'none');
+      expect(catchResult.type).toBe(CatchType.NONE);
+      expect(catchResult.cupKey).toBe('none');
     });
   });
 });

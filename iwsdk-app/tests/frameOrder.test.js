@@ -7,15 +7,16 @@
  * ============================================================================
  * Unit Tests for Deterministic Frame Execution Order & Physics Accumulator
  * Role: Person B (The Physics & Mission Lead / main.js)
- * Verification for Step 0.3: src/main.js & Frame Execution Pipeline
+ * Verification for Step 0.3 under Vitest
  * ============================================================================
  */
 
-import { describe, it, beforeEach } from 'node:test';
-import assert from 'node:assert/strict';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   GamePipeline,
   initGame,
+  tick,
+  fixedAccumulatorStep,
   gameplayKenGroup,
   createGameplayKenGroup,
   DefaultOrbitalEngine,
@@ -30,6 +31,41 @@ describe('Deterministic Frame Pipeline & Physics Accumulator (Step 0.3)', () => 
 
   beforeEach(() => {
     eventBus = new EventBus();
+  });
+
+  describe('Standalone fixedAccumulatorStep Helper', () => {
+    it('advances physics in fixed 1/120s increments without drift', () => {
+      let stepCount = 0;
+      const stepDts = [];
+      const mockEngine = {
+        step(dt) {
+          stepCount++;
+          stepDts.push(dt);
+        }
+      };
+
+      const fixedDelta = 1 / 120;
+      // Provide accumulator = 0.025s (approx 3 steps of 1/120s = 0.025s)
+      const res = fixedAccumulatorStep(mockEngine, 0.025, fixedDelta, 5);
+
+      expect(stepCount).toBe(3);
+      expect(res.stepsExecuted).toBe(3);
+      expect(stepDts.every((d) => Math.abs(d - fixedDelta) < 1e-9)).toBe(true);
+      expect(res.remainingAccumulator).toBeCloseTo(0.025 - 3 * (1 / 120), 6);
+    });
+
+    it('caps execution at maxFrames and resets residual on overflow', () => {
+      let stepCount = 0;
+      const mockEngine = {
+        step() { stepCount++; }
+      };
+
+      // 1.0s accumulator with maxFrames = 5
+      const res = fixedAccumulatorStep(mockEngine, 1.0, 1 / 120, 5);
+      expect(stepCount).toBe(5);
+      expect(res.stepsExecuted).toBe(5);
+      expect(res.remainingAccumulator).toBe(0.0);
+    });
   });
 
   describe('Fixed Timestep Accumulator (120 Hz Physics)', () => {
@@ -56,24 +92,24 @@ describe('Deterministic Frame Pipeline & Physics Accumulator (Step 0.3)', () => 
 
       // Frame 1: Exactly 1/60s (approx 0.016667s) -> 2 steps of 1/120s
       pipeline.tick(16.6667, null, 1 / 60);
-      assert.equal(orbitalSteps, 2, 'A 60 FPS tick (1/60s) must trigger exactly 2 physics steps (2 * 1/120s)');
-      assert.equal(stepDts[0], fixedDt);
-      assert.equal(stepDts[1], fixedDt);
+      expect(orbitalSteps).toBe(2);
+      expect(stepDts[0]).toBe(fixedDt);
+      expect(stepDts[1]).toBe(fixedDt);
 
       // Frame 2: Exactly 1/120s (approx 0.008333s) -> 1 step of 1/120s
       pipeline.tick(25.0, null, 1 / 120);
-      assert.equal(orbitalSteps, 3, 'A 120 FPS tick (1/120s) must trigger exactly 1 additional physics step');
-      assert.equal(stepDts[2], fixedDt);
+      expect(orbitalSteps).toBe(3);
+      expect(stepDts[2]).toBe(fixedDt);
 
       // Frame 3: 0.005s (faster than 120 Hz) -> 0 steps, remainder stays in accumulator
       pipeline.tick(30.0, null, 0.005);
-      assert.equal(orbitalSteps, 3, 'A fast frame below 1/120s must not execute a physics step yet');
-      assert.ok(pipeline.accumulator > 0, 'Residual delta must be preserved in accumulator');
+      expect(orbitalSteps).toBe(3);
+      expect(pipeline.accumulator > 0).toBe(true);
 
       // Frame 4: Another 0.005s -> Total 0.010s >= 1/120s (0.00833s) -> 1 step executed, ~0.00167s remains
       pipeline.tick(35.0, null, 0.005);
-      assert.equal(orbitalSteps, 4, 'Accumulated dt exceeding 1/120s triggers the step');
-      assert.equal(stepDts[3], fixedDt);
+      expect(orbitalSteps).toBe(4);
+      expect(stepDts[3]).toBe(fixedDt);
     });
 
     it('frame delta clamping prevents explosion when rawDelta > 0.05s', () => {
@@ -95,12 +131,9 @@ describe('Deterministic Frame Pipeline & Physics Accumulator (Step 0.3)', () => 
       pipeline.tick(1500, null, 1.5);
 
       // Clamped to 0.05s (which is 6 steps of 1/120s, but capped by maxAccumulatedFrames = 5)
-      assert.ok(
-        orbitalSteps <= 5,
-        `Lag spike of 1.5s must be clamped by MAX_ACCUMULATED_FRAMES (got ${orbitalSteps} steps, max 5)`
-      );
-      assert.equal(orbitalSteps, 5);
-      assert.equal(pipeline.accumulator, 0.0, 'Accumulator must be reset after hitting spiral cap');
+      expect(orbitalSteps).toBeLessThanOrEqual(5);
+      expect(orbitalSteps).toBe(5);
+      expect(pipeline.accumulator).toBe(0.0);
     });
   });
 
@@ -163,7 +196,7 @@ describe('Deterministic Frame Pipeline & Physics Accumulator (Step 0.3)', () => 
 
       pipeline.tick(16.6667, null, 1 / 120);
 
-      assert.deepEqual(orderLog, [
+      expect(orderLog).toEqual([
         'STAGE_1_INPUT',
         'STAGE_2_CATCH',
         'STAGE_3_SCORE',
@@ -221,11 +254,10 @@ describe('Deterministic Frame Pipeline & Physics Accumulator (Step 0.3)', () => 
 
       pipeline.tick(16.6667, null, 1 / 120);
 
-      // Verify that CATCH was emitted before SCORE and both were handled before Stage 5/6
-      assert.deepEqual(eventSequence, ['DETECTOR_UPDATE', 'SCORE_UPDATE', 'MISSION_UPDATE']);
-      assert.equal(handledEvents.length, 2);
-      assert.equal(handledEvents[0].type, 'CATCH');
-      assert.equal(handledEvents[1].type, 'SCORE');
+      expect(eventSequence).toEqual(['DETECTOR_UPDATE', 'SCORE_UPDATE', 'MISSION_UPDATE']);
+      expect(handledEvents.length).toBe(2);
+      expect(handledEvents[0].type).toBe('CATCH');
+      expect(handledEvents[1].type).toBe('SCORE');
     });
 
     it('Stage 6 delivers frozen / read-only snapshots to WorldRenderer', () => {
@@ -244,32 +276,36 @@ describe('Deterministic Frame Pipeline & Physics Accumulator (Step 0.3)', () => 
 
       pipeline.tick(16.6667, null, 1 / 120);
 
-      assert.ok(receivedSnapshot, 'Renderer must receive snapshot');
-      assert.ok(Object.isFrozen(receivedSnapshot), 'Root snapshot must be frozen');
-      assert.ok(Object.isFrozen(receivedSnapshot.physicsState), 'physicsState snapshot must be frozen');
-      assert.ok(Object.isFrozen(receivedSnapshot.missionState), 'missionState snapshot must be frozen');
-      assert.ok(Object.isFrozen(receivedSnapshot.planetState), 'planetState snapshot must be frozen');
-      assert.ok(Object.isFrozen(receivedSnapshot.targetState), 'targetState snapshot must be frozen');
+      expect(receivedSnapshot).toBeTruthy();
+      expect(Object.isFrozen(receivedSnapshot)).toBe(true);
+      expect(Object.isFrozen(receivedSnapshot.physicsState)).toBe(true);
+      expect(Object.isFrozen(receivedSnapshot.missionState)).toBe(true);
+      expect(Object.isFrozen(receivedSnapshot.planetState)).toBe(true);
+      expect(Object.isFrozen(receivedSnapshot.targetState)).toBe(true);
     });
   });
 
-  describe('Integration & Bootloader (initGame)', () => {
+  describe('Integration & Bootloader (initGame & tick)', () => {
     it('initGame() returns pipeline, canonical gameplayKenGroup, eventBus, tick, and stop controls', () => {
       const game = initGame({ eventBus, manualTick: true });
 
-      assert.ok(game.pipeline instanceof GamePipeline);
-      assert.ok(game.gameplayKenGroup);
-      assert.equal(game.eventBus, eventBus);
-      assert.equal(typeof game.tick, 'function');
-      assert.equal(typeof game.stop, 'function');
+      expect(game.pipeline instanceof GamePipeline).toBe(true);
+      expect(game.gameplayKenGroup).toBeTruthy();
+      expect(game.eventBus).toBe(eventBus);
+      expect(typeof game.tick).toBe('function');
+      expect(typeof game.stop).toBe('function');
 
       // Manual frame stepping
       game.tick(16.6667, null, 1 / 120);
-      assert.equal(game.pipeline.totalRenderTicks, 1);
-      assert.equal(game.pipeline.totalPhysicsSteps, 1);
+      expect(game.pipeline.totalRenderTicks).toBe(1);
+      expect(game.pipeline.totalPhysicsSteps).toBe(1);
 
       game.stop();
     });
+
+    it('standalone tick export executes without crashing', () => {
+      expect(typeof tick).toBe('function');
+      tick(16.6667, null, 1 / 120);
+    });
   });
 });
-
