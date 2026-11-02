@@ -16,7 +16,9 @@ import {
     FakeInput,
     REACH_BOUNDS,
     DEFAULT_KEN_POSITION,
+    CUP_TARGET_ROLL_ANGLES,
 } from './FakeInput.js';
+import { getCupConfig } from './cupConfigs.js';
 
 describe('FakeInput Module', () => {
     it('1. verifies initial position and orientation in gameplayKenGroup', () => {
@@ -306,5 +308,127 @@ describe('FakeInput Module', () => {
         // Confirm cupConfigs and BallTrajectory are unmodified by importing constants
         assert.ok(REACH_BOUNDS);
         assert.ok(DEFAULT_KEN_POSITION);
+    });
+
+    it('13. for each target cup, after enough updates the world-space normal of that cup has dot with (0,1,0) >= 0.99', () => {
+        const rotateVec = (v, q) => {
+            const qx = q.x, qy = q.y, qz = q.z, qw = q.w;
+            const vx = v.x, vy = v.y, vz = v.z;
+            const tx = 2 * (qy * vz - qz * vy);
+            const ty = 2 * (qz * vx - qx * vz);
+            const tz = 2 * (qx * vy - qy * vx);
+            return {
+                x: vx + qw * tx + (qy * tz - qz * ty),
+                y: vy + qw * ty + (qz * tx - qx * tz),
+                z: vz + qw * tz + (qx * ty - qy * tx),
+            };
+        };
+
+        const cups = ['big', 'small', 'base', 'spike'];
+        for (const cupKey of cups) {
+            const input = new FakeInput();
+            input.setTargetCup(cupKey);
+
+            // Settle over ~0.4s (25 frames of 0.016s)
+            for (let i = 0; i < 25; i++) {
+                input.update(0.016);
+            }
+
+            const config = getCupConfig(cupKey);
+            const localNormal = config.localNormal || config.normal;
+            const worldNormal = rotateVec(localNormal, input.gameplayKenGroup.quaternion);
+
+            // Dot with world up (0, 1, 0) is simply worldNormal.y
+            assert.ok(
+                worldNormal.y >= 0.99,
+                `Cup ${cupKey} normal did not align with world UP: dot=${worldNormal.y}`
+            );
+        }
+    });
+
+    it('14. roll angle changes monotonically toward the target', () => {
+        // Test towards positive angle (Big cup: +Math.PI / 2)
+        const inputPos = new FakeInput();
+        inputPos.setTargetCup('big');
+
+        let prevAngle = inputPos.gameplayKenGroup.rotation.z;
+        for (let i = 0; i < 20; i++) {
+            inputPos.update(0.016);
+            const currentAngle = inputPos.gameplayKenGroup.rotation.z;
+            assert.ok(
+                currentAngle >= prevAngle,
+                `Angle did not increase monotonically towards target: prev=${prevAngle}, current=${currentAngle}`
+            );
+            prevAngle = currentAngle;
+        }
+
+        // Test towards negative angle (Small cup: -Math.PI / 2)
+        const inputNeg = new FakeInput();
+        inputNeg.setTargetCup('small');
+
+        prevAngle = inputNeg.gameplayKenGroup.rotation.z;
+        for (let i = 0; i < 20; i++) {
+            inputNeg.update(0.016);
+            const currentAngle = inputNeg.gameplayKenGroup.rotation.z;
+            assert.ok(
+                currentAngle <= prevAngle,
+                `Angle did not decrease monotonically towards target: prev=${prevAngle}, current=${currentAngle}`
+            );
+            prevAngle = currentAngle;
+        }
+    });
+
+    it('15. unknown cup keys are ignored', () => {
+        const input = new FakeInput();
+        input.setTargetCup('nonexistent_cup');
+
+        assert.equal(input.targetCup, null);
+
+        for (let i = 0; i < 20; i++) {
+            input.update(0.016);
+        }
+
+        assert.equal(input.gameplayKenGroup.rotation.z, 0.0);
+    });
+
+    it('16. with autoRoll disabled nothing rolls', () => {
+        const input = new FakeInput({ autoRoll: false });
+        input.setTargetCup('big');
+
+        for (let i = 0; i < 20; i++) {
+            input.update(0.016);
+        }
+
+        assert.equal(input.gameplayKenGroup.rotation.z, 0.0);
+    });
+
+    it('17. manual roll overrides auto-roll while held', () => {
+        const input = new FakeInput();
+        input.setTargetCup('big'); // target is +90 deg
+
+        // Press Q (manual CCW roll: decreases angle)
+        input.handleKeyDown({ code: 'KeyQ', key: 'q' });
+
+        for (let i = 0; i < 10; i++) {
+            input.update(0.016);
+        }
+
+        // Manual roll should have driven angle negative despite targetCup being +90 deg
+        assert.ok(
+            input.gameplayKenGroup.rotation.z < 0.0,
+            `Manual roll should override auto-roll: got angle ${input.gameplayKenGroup.rotation.z}`
+        );
+
+        // Release Q: auto-roll resumes toward +90 deg
+        input.handleKeyUp({ code: 'KeyQ', key: 'q' });
+
+        for (let i = 0; i < 30; i++) {
+            input.update(0.016);
+        }
+
+        assert.ok(
+            input.gameplayKenGroup.rotation.z > 1.5,
+            `After releasing manual roll, auto-roll should bring angle to ~+1.57 rad: got ${input.gameplayKenGroup.rotation.z}`
+        );
     });
 });

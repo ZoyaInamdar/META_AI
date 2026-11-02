@@ -88,14 +88,19 @@ export class BallTrajectory {
 
         // Flight timing
         this._elapsed = 0.0;
+
+        // Flight counter
+        this._flightId = 0;
     }
 
     /**
      * Starts a new ball flight from the specified starting position.
+     * Increments flightId by 1 each time launch() is called.
      *
      * @param {{ x?: number, y?: number, z?: number }} [startVec3] - Launch position
      */
     launch(startVec3) {
+        this._flightId += 1;
         // Defensive copy of launch position: do not mutate or store reference to input vector
         this._startX = (startVec3 && Number.isFinite(startVec3.x)) ? startVec3.x : 0.0;
         this._startY = (startVec3 && Number.isFinite(startVec3.y)) ? startVec3.y : 0.0;
@@ -207,7 +212,37 @@ export class BallTrajectory {
                 z: this._velocity.z,
             },
             mode: this._mode,
+            flightId: this._flightId,
         };
+    }
+
+    /**
+     * Unique flight identifier (session-scoped counter, 1-based).
+     * @returns {number}
+     */
+    get flightId() {
+        return this._flightId;
+    }
+
+    /**
+     * Resets trajectory state to seated without resetting the flight counter.
+     */
+    reset() {
+        this._mode = BallTrajectoryMode.SEATED;
+        this._elapsed = 0.0;
+        this._position.x = this._startX;
+        this._position.y = this._startY;
+        this._position.z = this._startZ;
+        this._velocity.x = 0.0;
+        this._velocity.y = 0.0;
+        this._velocity.z = 0.0;
+    }
+
+    /**
+     * Resets flightId counter to 0 (for test isolation only).
+     */
+    resetFlightCounter() {
+        this._flightId = 0;
     }
 
     /**
