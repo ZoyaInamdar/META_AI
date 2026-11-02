@@ -3,9 +3,9 @@
  * Role: Person C (Visuals & Rendering)
  */
 
-import test, { describe, it } from 'node:test';
+import { describe, it, test } from 'vitest';
 import assert from 'node:assert/strict';
-import { MeshPhysicalMaterial, ShaderLib, Color } from 'three';
+import { MeshPhysicalMaterial, ShaderLib, Color, Matrix4 } from 'three';
 import {
     KEN_PALETTE,
     KEN_MATERIALS,
@@ -112,9 +112,10 @@ describe('KenMaterials Module', () => {
                 // Compile mock shader
                 assert.doesNotThrow(() => mat.onBeforeCompile(mockShader));
 
-                // Verify vertex shader injects object-space position
+                // Verify vertex shader injects assembly-relative coordinates
                 assert.ok(mockShader.vertexShader.includes('varying vec3 vGalaxyPos;'), `${mat.name} vertexShader must declare vGalaxyPos`);
-                assert.ok(mockShader.vertexShader.includes('vGalaxyPos = position;'), `${mat.name} vertexShader must assign position to vGalaxyPos`);
+                assert.ok(mockShader.vertexShader.includes('uniform mat4 kenAssemblyInv;'), `${mat.name} vertexShader must declare kenAssemblyInv`);
+                assert.ok(mockShader.vertexShader.includes('vGalaxyPos = (kenAssemblyInv * kenWorldPos).xyz;'), `${mat.name} vertexShader must assign assembly-relative position to vGalaxyPos`);
 
                 // Verify fragment shader injects domain-warping, harmonic FBM, and continuous 6-stop color ramp
                 assert.ok(mockShader.fragmentShader.includes('kenWarp3D_A'), `${mat.name} fragmentShader must include kenWarp3D_A`);
@@ -146,7 +147,7 @@ describe('KenMaterials Module', () => {
             lavenderMoonMaterial.onBeforeCompile(lavenderShader);
             assert.ok(lavenderShader.fragmentShader.includes('kenDomainWarpFbm'), 'Lavender Moon must include kenDomainWarpFbm logic');
             assert.ok(lavenderShader.fragmentShader.includes('kenGalaxyRamp'), 'Lavender Moon must include kenGalaxyRamp logic');
-            assert.ok(lavenderShader.fragmentShader.includes('0.12'), 'Lavender Moon must use configured tShift to restrain deep blues');
+            assert.ok(lavenderShader.fragmentShader.includes('0.02'), 'Lavender Moon must use configured tShift to restrain deep blues');
             assert.ok(lavenderShader.fragmentShader.includes('0.46'), 'Lavender Moon must use configured nebulaWeight');
         });
 
@@ -266,6 +267,28 @@ describe('KenMaterials Module', () => {
             assert.equal(center.getObjectByName('spike-kensaki').material, moonPearlMaterial);
             assert.equal(left.getObjectByName('spike-kensaki').material, moonPearlMaterial);
             assert.equal(right.getObjectByName('spike-kensaki').material, moonPearlMaterial);
+        });
+
+        it('verifies assembly coordinate transform in onBeforeRender across assembly meshes', () => {
+            const assembly = createKendamaAssemblyGroup();
+            assembly.position.set(2.0, 1.5, -0.5);
+            assembly.rotation.set(0.2, 0.4, 0.1);
+            assembly.updateMatrixWorld(true);
+
+            const bigCup = assembly.getObjectByName('big-cup-oozara');
+            assert.ok(bigCup, 'bigCup must exist');
+
+            // Invoke onBeforeRender for bigCup
+            bigCup.material.onBeforeRender(null, null, null, bigCup.geometry, bigCup, null);
+
+            assert.ok(bigCup.material.userData.kenAssemblyInv, 'userData.kenAssemblyInv must be defined');
+
+            // The inverted matrix multiplied by assembly matrixWorld must yield identity
+            const checkMat = bigCup.material.userData.kenAssemblyInv.clone().multiply(assembly.matrixWorld);
+            const idMat = new Matrix4();
+            for (let i = 0; i < 16; i++) {
+                assert.ok(Math.abs(checkMat.elements[i] - idMat.elements[i]) < 1e-5, `Matrix element ${i} must match identity`);
+            }
         });
     });
 });

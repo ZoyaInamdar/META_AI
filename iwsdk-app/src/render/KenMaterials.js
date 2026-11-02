@@ -16,7 +16,7 @@
  * Lavender -> Blush Pink -> Pearl White) without circular decal artifacts or external textures.
  */
 
-import { MeshPhysicalMaterial, Color } from 'three';
+import { MeshPhysicalMaterial, Color, Matrix4 } from 'three';
 
 /**
  * Authoritative color hex codes for the Kendama pastel galaxy palette.
@@ -81,7 +81,7 @@ function toLinearRgb(input) {
  *
  * @param {MeshPhysicalMaterial} material - The material to enhance
  * @param {object} [options={}] - Customization options
- * @param {number} [options.freq=46.0] - Spatial frequency for procedural 3D nebula coordinates
+ * @param {number} [options.freq=105.0] - Spatial frequency for procedural 3D nebula coordinates
  * @param {number} [options.warpStrength=0.50] - Vector displacement intensity for domain warping
  * @param {number} [options.tShift=0.0] - Additive bias on the continuous scalar parameter
  * @param {number} [options.tScale=1.0] - Multiplier on the continuous scalar parameter
@@ -99,7 +99,7 @@ export function applyGalaxyShader(material, options = {}) {
     if (!material || !material.isMaterial) return material;
 
     const {
-        freq = 46.0,
+        freq = 105.0,
         warpStrength = 0.50,
         tShift = 0.0,
         tScale = 1.0,
@@ -123,23 +123,54 @@ export function applyGalaxyShader(material, options = {}) {
     const cPink = toLinearRgb(KEN_PALETTE.ROSE_NEBULA);
     const cWhite = toLinearRgb(KEN_PALETTE.PEARL_WHITE);
 
+    // Assembly coordinate inverse transformation matrix uniform
+    material.userData.kenAssemblyInv = new Matrix4();
+
+    // Dynamically update the assembly inverse matrix and upload to active program before each draw call
+    const previousOnBeforeRender = material.onBeforeRender;
+    material.onBeforeRender = function (renderer, scene, camera, geometry, object, group) {
+        if (typeof previousOnBeforeRender === 'function') {
+            previousOnBeforeRender.call(this, renderer, scene, camera, geometry, object, group);
+        }
+        if (!object) return;
+        const assembly = (object.parent && !object.parent.isScene) ? object.parent : object;
+        const inv = material.userData.kenAssemblyInv;
+        if (inv) {
+            inv.copy(assembly.matrixWorld).invert();
+        }
+        if (renderer && renderer.properties) {
+            const matProps = renderer.properties.get(material);
+            if (matProps && matProps.currentProgram) {
+                const pUniforms = matProps.currentProgram.getUniforms();
+                const gl = renderer.getContext ? renderer.getContext() : null;
+                if (pUniforms && gl && inv) {
+                    pUniforms.setValue(gl, 'kenAssemblyInv', inv);
+                }
+            }
+        }
+    };
+
     // Unique program cache key ensures the browser and Three.js compile a fresh, un-cached program
-    material.customProgramCacheKey = () => `ken-galaxy-v3-${material.name || 'custom'}`;
+    material.customProgramCacheKey = () => `ken-galaxy-v4-${material.name || 'custom'}`;
 
     material.onBeforeCompile = (shader, renderer) => {
         try {
             console.log(`[GALAXY-SHADER] onBeforeCompile executed for material "${material.name}"`);
 
+            shader.uniforms.kenAssemblyInv = { value: material.userData.kenAssemblyInv };
+
             shader.vertexShader = shader.vertexShader.replace(
                 '#include <common>',
                 `#include <common>
 varying vec3 vGalaxyPos;
+uniform mat4 kenAssemblyInv;
 `
             );
             shader.vertexShader = shader.vertexShader.replace(
                 '#include <begin_vertex>',
                 `#include <begin_vertex>
-vGalaxyPos = position;
+vec4 kenWorldPos = modelMatrix * vec4(transformed, 1.0);
+vGalaxyPos = (kenAssemblyInv * kenWorldPos).xyz;
 `
             );
 
@@ -294,11 +325,11 @@ export const moonPearlMaterial = new MeshPhysicalMaterial({
 });
 moonPearlMaterial.name = 'mat-moon-pearl';
 applyGalaxyShader(moonPearlMaterial, {
-    freq: 36.0,
+    freq: 100.0,
     warpStrength: 0.45,
-    tShift: 0.28,
+    tShift: 0.04,
     tScale: 1.0,
-    nebulaWeight: 0.22,
+    nebulaWeight: 0.42,
     blueWeight: 0.05,
     sheenWeight: 0.42,
     sparkleWeight: 0.85,
@@ -329,10 +360,10 @@ export const roseNebulaMaterial = new MeshPhysicalMaterial({
 });
 roseNebulaMaterial.name = 'mat-rose-nebula';
 applyGalaxyShader(roseNebulaMaterial, {
-    freq: 46.0,
+    freq: 105.0,
     warpStrength: 0.52,
     tShift: 0.00,
-    tScale: 1.0,
+    tScale: 1.15,
     nebulaWeight: 0.48,
     blueWeight: 0.65,
     sheenWeight: 0.35,
@@ -364,10 +395,10 @@ export const lavenderMoonMaterial = new MeshPhysicalMaterial({
 });
 lavenderMoonMaterial.name = 'mat-lavender-moon';
 applyGalaxyShader(lavenderMoonMaterial, {
-    freq: 48.0,
+    freq: 105.0,
     warpStrength: 0.48,
-    tShift: 0.12,
-    tScale: 1.0,
+    tShift: 0.02,
+    tScale: 1.15,
     nebulaWeight: 0.46,
     blueWeight: 0.18,
     sheenWeight: 0.35,
@@ -395,7 +426,7 @@ export const roseGoldMaterial = new MeshPhysicalMaterial({
 });
 roseGoldMaterial.name = 'mat-rose-gold';
 applyGalaxyShader(roseGoldMaterial, {
-    freq: 40.0,
+    freq: 100.0,
     warpStrength: 0.30,
     tShift: 0.40,
     tScale: 1.0,
@@ -430,11 +461,11 @@ export const pearlWhiteMaterial = new MeshPhysicalMaterial({
 });
 pearlWhiteMaterial.name = 'mat-pearl-white';
 applyGalaxyShader(pearlWhiteMaterial, {
-    freq: 40.0,
+    freq: 100.0,
     warpStrength: 0.40,
-    tShift: 0.35,
+    tShift: 0.05,
     tScale: 1.0,
-    nebulaWeight: 0.14,
+    nebulaWeight: 0.38,
     blueWeight: 0.0,
     sheenWeight: 0.45,
     sparkleWeight: 0.85,
