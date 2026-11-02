@@ -1,14 +1,18 @@
 /**
- * Celestial Kendama - Procedural Cup Geometry Generator
+ * Celestial Kendama - Procedural Cup & Ken Geometry Generator
  * Role: Person C (Visuals & Rendering)
  *
- * Generates hollow cup bowl geometries using Three.js LatheGeometry.
+ * SINGLE SOURCE OF TRUTH:
+ * Generates procedural Kendama geometry strictly adhering to Person A's
+ * authoritative configurations in src/input/cupConfigs.js (kenGeometry, cupConfigs, KEN_SCALE, BALL_RADIUS).
  *
- * Coordinate Convention (Local Cup Space):
- * - Origin (0, 0, 0): Center of the cup opening / rim aperture.
- * - +Y axis: Local opening normal pointing out of the cup cavity.
- * - -Y axis: Direction the hollow bowl body recedes backwards into the handle.
- * - Local X / Z: Circular cross-section symmetric around the Y axis.
+ * Coordinate Convention (World & Ken Assembly Space):
+ * - Origin (0, 0, 0): Center of the crossbar junction (Sarado / Ken junction).
+ * - +Y axis: Points upward along handle towards Spike tip (localNormal = 0, 1, 0).
+ * - -Y axis: Points downward along stem towards Base Cup (localNormal = 0, -1, 0).
+ * - +X axis: Points outward along crossbar towards Big Cup (localNormal = 1, 0, 0).
+ * - -X axis: Points outward along crossbar towards Small Cup (localNormal = -1, 0, 0).
+ * - +Z / -Z: Front / back facing axis.
  */
 
 import {
@@ -18,11 +22,21 @@ import {
     Vector2,
     Vector3,
 } from 'three';
+import {
+    kenGeometry,
+    cupConfigs,
+    CUP_CONFIGS,
+    KEN_SCALE,
+    BALL_RADIUS,
+    getCupConfig,
+} from '../input/cupConfigs.js';
+
+export { kenGeometry, cupConfigs, CUP_CONFIGS, KEN_SCALE, BALL_RADIUS, getCupConfig };
 
 /** Default visual wall thickness in meters (3.0 mm) */
 export const DEFAULT_WALL_THICKNESS = 0.003;
 
-/** Default number of radial lathe segments (balance of smoothness and Quest VR budget) */
+/** Default number of radial lathe segments */
 export const DEFAULT_RADIAL_SEGMENTS = 36;
 
 /** Default number of sample points along the inner and outer curve profiles */
@@ -31,80 +45,95 @@ export const DEFAULT_PROFILE_STEPS = 16;
 /** Default ratio of inner floor radius relative to rim radius (~33%) */
 export const DEFAULT_FLOOR_RADIUS_RATIO = 0.33;
 
-/** Default handle length in meters (11.0 cm) */
-export const DEFAULT_HANDLE_LENGTH = 0.11;
+// --- Crossbar (Sarado) Authoritative Constants ---
+/** Crossbar half-width along X in meters (0.0405 * KEN_SCALE = 0.06075 m) */
+export const DEFAULT_CROSSBAR_HALF_WIDTH = kenGeometry.crossbar.halfWidth;
 
-/** Default handle top radius in meters (12.0 mm) */
-export const DEFAULT_HANDLE_TOP_RADIUS = 0.012;
+/** Crossbar center junction radius in meters (0.011 * KEN_SCALE = 0.0165 m) */
+export const DEFAULT_CROSSBAR_WAIST_RADIUS = kenGeometry.crossbar.waistRadius;
+export const DEFAULT_CROSSBAR_CENTER_RADIUS = kenGeometry.crossbar.waistRadius;
 
-/** Default handle bottom radius in meters (13.0 mm) */
-export const DEFAULT_HANDLE_BOTTOM_RADIUS = 0.013;
+/** Crossbar end radius in meters (0.022 * KEN_SCALE = 0.033 m) */
+export const DEFAULT_CROSSBAR_END_RADIUS = kenGeometry.crossbar.endRadius;
 
-/** Default handle waist radius in meters (10.5 mm) */
-export const DEFAULT_HANDLE_WAIST_RADIUS = 0.0105;
+/** Distance from junction center to Big Cup mounting face along +X (0.06075 m) */
+export const DEFAULT_CROSSBAR_BIG_SPAN = kenGeometry.crossbar.halfWidth;
 
-/** Default radial segments for handle geometry */
-export const DEFAULT_HANDLE_RADIAL_SEGMENTS = 32;
+/** Distance from junction center to Small Cup mounting face along -X (0.06075 m) */
+export const DEFAULT_CROSSBAR_SMALL_SPAN = kenGeometry.crossbar.halfWidth;
 
-/** Default profile sample steps for handle geometry */
-export const DEFAULT_HANDLE_PROFILE_STEPS = 16;
+/** Total crossbar span in meters (0.1215 m) */
+export const DEFAULT_CROSSBAR_SPAN = kenGeometry.crossbar.halfWidth * 2;
+export const DEFAULT_CROSSBAR_LENGTH = DEFAULT_CROSSBAR_SPAN;
 
-/** Default fillet radius for handle end caps in meters (2.0 mm) */
-export const DEFAULT_HANDLE_FILLET_RADIUS = 0.002;
+/** Crossbar Big Cup mounting face radius in meters (0.033 m, matching Big Cup rim) */
+export const DEFAULT_CROSSBAR_BIG_END_RADIUS = cupConfigs.big.rimRadius;
 
-/** Default crossbar center junction radius in meters (13.0 mm) */
-export const DEFAULT_CROSSBAR_CENTER_RADIUS = 0.013;
-
-/** Default distance from junction center to Big Cup mounting face along +X (44.11 mm) */
-export const DEFAULT_CROSSBAR_BIG_SPAN = 0.04411;
-
-/** Default distance from junction center to Small Cup mounting face along -X (39.11 mm) */
-export const DEFAULT_CROSSBAR_SMALL_SPAN = 0.03911;
-
-/** Default total crossbar span in meters (~83.22 mm) */
-export const DEFAULT_CROSSBAR_SPAN = DEFAULT_CROSSBAR_BIG_SPAN + DEFAULT_CROSSBAR_SMALL_SPAN;
-
-/** Default legacy crossbar span length in meters (10.0 cm) */
-export const DEFAULT_CROSSBAR_LENGTH = 0.10;
-
-/** Default crossbar Big Cup mounting face radius in meters (17.85 mm, matching Big Cup base) */
-export const DEFAULT_CROSSBAR_BIG_END_RADIUS = 0.01785;
-
-/** Default crossbar Small Cup mounting face radius in meters (16.20 mm, matching Small Cup base) */
-export const DEFAULT_CROSSBAR_SMALL_END_RADIUS = 0.01620;
-
-/** Default legacy crossbar wing end radius in meters (11.5 mm) */
-export const DEFAULT_CROSSBAR_END_RADIUS = 0.0115;
-
-/** Default Big Cup wing ergonomic waist radius (12.0 mm) */
-export const DEFAULT_CROSSBAR_BIG_WING_WAIST = 0.0120;
-
-/** Default Small Cup wing ergonomic waist radius (11.5 mm) */
-export const DEFAULT_CROSSBAR_SMALL_WING_WAIST = 0.0115;
+/** Crossbar Small Cup mounting face radius in meters (0.0255 m, matching Small Cup rim) */
+export const DEFAULT_CROSSBAR_SMALL_END_RADIUS = cupConfigs.small.rimRadius;
 
 /** Default radial segments for crossbar geometry */
 export const DEFAULT_CROSSBAR_RADIAL_SEGMENTS = 32;
 
 /** Default wing sample steps for crossbar profile */
 export const DEFAULT_CROSSBAR_WING_STEPS = 12;
-
-/** Default profile sample steps for crossbar geometry (legacy) */
 export const DEFAULT_CROSSBAR_PROFILE_STEPS = 16;
 
-/** Default fillet radius for crossbar end caps in meters (2.5 mm, legacy) */
-export const DEFAULT_CROSSBAR_FILLET_RADIUS = 0.0025;
+/** Vertical elevation of Sarado crossbar axis in Ken coordinates (0.0 m at origin) */
+export const DEFAULT_SARADO_ELEVATION_Y = 0.0;
 
-/** Vertical elevation of Sarado crossbar axis in Ken coordinates (meters) */
-export const DEFAULT_SARADO_ELEVATION_Y = 0.08885;
+// --- Stem (Handle) Authoritative Constants ---
+/** Stem top Y elevation in meters (-0.022 * KEN_SCALE = -0.033 m) */
+export const DEFAULT_STEM_TOP_Y = kenGeometry.stem.topY;
 
-/** Default spike length along Y from Sarado elevation in meters (96.15 mm) */
-export const DEFAULT_SPIKE_LENGTH = 0.09615;
+/** Stem bottom Y elevation in meters (-0.120 * KEN_SCALE = -0.180 m) */
+export const DEFAULT_STEM_BOTTOM_Y = kenGeometry.stem.bottomY;
 
-/** Default spike root radius at Sarado intersection in meters (7.0 mm = 14 mm dia) */
-export const DEFAULT_SPIKE_ROOT_RADIUS = 0.0070;
+/** Stem neck radius in meters (0.0075 * KEN_SCALE = 0.01125 m) */
+export const DEFAULT_STEM_NECK_RADIUS = kenGeometry.stem.neckRadius;
 
-/** Default spike tip rounded radius in meters (1.5 mm = 3 mm dia) */
-export const DEFAULT_SPIKE_TIP_RADIUS = 0.0015;
+/** Stem bulge Y elevation in meters (-0.079 * KEN_SCALE = -0.1185 m) */
+export const DEFAULT_STEM_BULGE_Y = kenGeometry.stem.bulgeY;
+
+/** Stem bulge radius in meters (0.013 * KEN_SCALE = 0.0195 m) */
+export const DEFAULT_STEM_BULGE_RADIUS = kenGeometry.stem.bulgeRadius;
+
+/** Stem base flare radius in meters (0.0175 * KEN_SCALE = 0.02625 m) */
+export const DEFAULT_STEM_BASE_FLARE_RADIUS = kenGeometry.stem.baseFlareRadius;
+
+/** Total handle / stem length in meters (-0.033 - (-0.180) = 0.147 m) */
+export const DEFAULT_HANDLE_LENGTH = kenGeometry.stem.topY - kenGeometry.stem.bottomY;
+
+/** Default handle top radius in meters (0.01125 m) */
+export const DEFAULT_HANDLE_TOP_RADIUS = kenGeometry.stem.neckRadius;
+
+/** Default handle bottom radius in meters (0.02625 m) */
+export const DEFAULT_HANDLE_BOTTOM_RADIUS = kenGeometry.stem.baseFlareRadius;
+
+/** Default handle waist / neck radius in meters (0.01125 m) */
+export const DEFAULT_HANDLE_WAIST_RADIUS = kenGeometry.stem.neckRadius;
+
+/** Default radial segments for handle geometry */
+export const DEFAULT_HANDLE_RADIAL_SEGMENTS = 32;
+
+/** Default profile sample steps for handle geometry */
+export const DEFAULT_HANDLE_PROFILE_STEPS = 24;
+
+// --- Spike (Kensaki) Authoritative Constants ---
+/** Spike base Y elevation in meters (0.022 * KEN_SCALE = 0.033 m) */
+export const DEFAULT_SPIKE_BASE_Y = kenGeometry.spike.baseY;
+
+/** Spike tip Y elevation in meters (0.045 * KEN_SCALE = 0.0675 m) */
+export const DEFAULT_SPIKE_TIP_Y = kenGeometry.spike.tipY;
+
+/** Spike length in meters (0.0675 - 0.033 = 0.0345 m) */
+export const DEFAULT_SPIKE_LENGTH = kenGeometry.spike.tipY - kenGeometry.spike.baseY;
+
+/** Spike root radius in meters (0.01125 m) */
+export const DEFAULT_SPIKE_ROOT_RADIUS = kenGeometry.stem.neckRadius;
+
+/** Spike tip rounded radius in meters (0.0015 * KEN_SCALE = 0.00225 m) */
+export const DEFAULT_SPIKE_TIP_RADIUS = 0.0015 * KEN_SCALE;
 
 /** Default radial segments for spike geometry */
 export const DEFAULT_SPIKE_RADIAL_SEGMENTS = 32;
@@ -112,36 +141,27 @@ export const DEFAULT_SPIKE_RADIAL_SEGMENTS = 32;
 /**
  * Creates a hollow cup bowl geometry from a cup configuration object.
  *
- * The geometry is generated using a 5-stage profile curve revolved 360 degrees.
- * The profile is traversed in counter-clockwise (CCW) outward-normal order:
+ * Traversed in CCW outward-normal order:
  * 1. Outer Bottom: Flat circular base extending from axis r = 0 out to outer floor corner.
- * 2. Outer Wall: Smooth curve ascending from outer corner to outer rim at y = 0.
+ * 2. Outer Wall: Smooth curve ascending from outer corner to outer rim aperture at y = 0.
  * 3. Rim Lip: Smooth rounded lip bridging outer rim to inner rim (r = rimRadius, y = 0).
  * 4. Inner Wall: Smooth concave curve descending to inner floor corner at y = -depth.
  * 5. Inner Floor: Flat circular disc extending from inner floor edge back to central axis r = 0.
  *
- * Following this traversal order ensures that surface normals on all faces point outward
- * into free space (away from solid material):
- * - Outer surfaces (bottom & sidewall) point outward into the room.
- * - Rim crest points upward into the room.
- * - Cavity surfaces (inner wall & floor) point inward into the cup cavity.
+ * Rim aperture center is at (0, 0, 0), with local +Y pointing out of the cup cavity.
  *
- * Degenerate zero-area triangles generated at the central axis (r = 0) by LatheGeometry
- * are filtered out of the index buffer, yielding a 100% watertight, 2-manifold mesh.
- *
- * @param {object} cupConfig - Cup configuration (e.g. from CUP_CONFIGS in cupConfigs.js)
+ * @param {object} cupConfig - Cup configuration (e.g. from cupConfigs)
  * @param {number} cupConfig.rimRadius - Visual rim opening radius in meters
  * @param {number} cupConfig.depth - Cavity depth from rim to inner floor in meters
  * @param {object} [options={}] - Optional visual parameters
  * @param {number} [options.wallThickness=0.003] - Cup wall thickness in meters
  * @param {number} [options.radialSegments=36] - Number of radial subdivisions around Y
  * @param {number} [options.profileSteps=16] - Number of curve sample steps along profile
- * @param {number} [options.innerFloorRadius] - Explicit inner floor radius (defaults to rimRadius * 0.33)
+ * @param {number} [options.innerFloorRadius] - Explicit inner floor radius
  * @param {number} [options.floorRadiusRatio=0.33] - Ratio to derive inner floor radius from rimRadius
  * @returns {LatheGeometry} The generated hollow cup geometry
  */
 export function createCupGeometry(cupConfig, options = {}) {
-    // 1. Validate cupConfig
     if (!cupConfig || typeof cupConfig !== 'object') {
         throw new TypeError(
             'createCupGeometry: cupConfig must be a valid configuration object.'
@@ -162,7 +182,6 @@ export function createCupGeometry(cupConfig, options = {}) {
         );
     }
 
-    // 2. Validate visual options
     const wallThickness = options.wallThickness ?? DEFAULT_WALL_THICKNESS;
     if (!Number.isFinite(wallThickness) || wallThickness <= 0) {
         throw new RangeError(
@@ -190,7 +209,6 @@ export function createCupGeometry(cupConfig, options = {}) {
         );
     }
 
-    // 3. Determine inner and outer floor radii
     const floorRatio = options.floorRadiusRatio ?? DEFAULT_FLOOR_RADIUS_RATIO;
     const innerFloorRadius = options.innerFloorRadius ?? (rimRadius * floorRatio);
 
@@ -204,19 +222,13 @@ export function createCupGeometry(cupConfig, options = {}) {
     const outerDepth = depth + wallThickness;
     const rimOuterRadius = rimRadius + wallThickness;
 
-    // 4. Construct 2D cross-section profile points (r, y)
-    // Traversed in CCW outward-normal order: Outer Bottom -> Outer Wall -> Rim Lip -> Inner Wall -> Inner Floor
     const points = [];
 
-    // Stage 1: Outer Bottom
-    // Flat horizontal base from central axis r = 0 out to outer bottom corner at y = -outerDepth.
-    // Outward surface normal points downward (-Y) into the environment.
+    // Stage 1: Outer Bottom (normal -Y)
     points.push(new Vector2(0.0, -outerDepth));
     points.push(new Vector2(outerFloorRadius, -outerDepth));
 
-    // Stage 2: Outer Wall
-    // Smooth convex curve ascending from outer corner to outer rim aperture (rimOuterRadius, 0).
-    // Outward surface normal points radially outward (+r) into the room.
+    // Stage 2: Outer Wall (normal +r)
     for (let i = 1; i <= profileSteps; i++) {
         const t = i / profileSteps;
         const r = outerFloorRadius + (rimOuterRadius - outerFloorRadius) * Math.sin(t * Math.PI * 0.5);
@@ -224,16 +236,12 @@ export function createCupGeometry(cupConfig, options = {}) {
         points.push(new Vector2(r, y));
     }
 
-    // Stage 3: Beveled / Rounded Rim Lip
-    // Smooth rounded crest bridging outer rim edge (rimOuterRadius, 0) to inner rim edge (rimRadius, 0).
-    // Outward surface normal points upward (+Y).
+    // Stage 3: Beveled / Rounded Rim Lip (normal +Y)
     const lipCrestHeight = wallThickness * 0.15;
     points.push(new Vector2(rimRadius + wallThickness * 0.5, lipCrestHeight));
     points.push(new Vector2(rimRadius, 0.0));
 
-    // Stage 4: Inner Wall
-    // Smooth concave curve descending from inner rim edge to inner floor corner (innerFloorRadius, -depth).
-    // Outward surface normal points radially inward (-r) into the cup cavity.
+    // Stage 4: Inner Wall (normal -r)
     for (let i = profileSteps - 1; i >= 1; i--) {
         const t = i / profileSteps;
         const r = innerFloorRadius + (rimRadius - innerFloorRadius) * Math.sin(t * Math.PI * 0.5);
@@ -241,25 +249,16 @@ export function createCupGeometry(cupConfig, options = {}) {
         points.push(new Vector2(r, y));
     }
 
-    // Stage 5: Inner Floor
-    // Flat horizontal disc from inner floor corner back to central axis r = 0 at y = -depth.
-    // Outward surface normal points upward (+Y) into the cup cavity where the ball seats.
+    // Stage 5: Inner Floor (normal +Y)
     points.push(new Vector2(innerFloorRadius, -depth));
     points.push(new Vector2(0.0, -depth));
 
-    // 5. Generate the 3D LatheGeometry by spinning the profile 360 degrees around Y axis
     const geometry = new LatheGeometry(points, radialSegments);
-
-    // 6. Clean degenerate zero-area triangles generated at axis endpoints (r = 0)
     filterDegenerateTriangles(geometry);
-
-    // 7. Compute vertex normals for correct lighting and shading
     geometry.computeVertexNormals();
 
-    // Ensure coincident center vertices at r = 0 have clean, consistent surface normals
     const norm = geometry.attributes.normal;
     if (norm) {
-        // Outer base center vertices point down into the environment (-Y)
         norm.setXYZ(0, 0, -1, 0);
     }
 
@@ -298,7 +297,6 @@ function filterDegenerateTriangles(geometry) {
         const dzCA = pos.getZ(c) - pos.getZ(a);
         const dCA2 = dxCA * dxCA + dyCA * dyCA + dzCA * dzCA;
 
-        // Retain only triangles whose 3 vertices have distinct 3D positions
         if (dAB2 > 1e-12 && dBC2 > 1e-12 && dCA2 > 1e-12) {
             cleanIndices.push(a, b, c);
         }
@@ -307,25 +305,23 @@ function filterDegenerateTriangles(geometry) {
 }
 
 /**
- * Creates the procedural kendama handle (Ken) geometry.
+ * Creates the procedural kendama handle (stem) geometry matching kenGeometry.stem.
  *
- * The handle is generated along the Y-axis with a subtle ergonomic waist,
- * flared transitions at the top and bottom, and smoothly rounded end caps.
+ * The stem profile runs vertically along the Y axis:
+ * - Top end at stem.topY (-0.033 m) with radius stem.neckRadius (0.01125 m)
+ * - Ergonomic grip bulge at stem.bulgeY (-0.1185 m) with radius stem.bulgeRadius (0.0195 m)
+ * - Base flare at stem.bottomY (-0.180 m) with radius stem.baseFlareRadius (0.02625 m)
  *
- * Coordinate Convention (Local Handle Space):
- * - Origin (0, 0, 0): Center of the handle body along the Y axis.
- * - +Y axis: Ascends towards the crossbar junction and top spike.
- * - -Y axis: Descends towards the base cup.
- * - Local X / Z: Circular cross-section symmetric around the Y axis.
- *
- * @param {object} [options={}] - Optional dimensional and visual parameters
- * @param {number} [options.length=0.11] - Total handle length along Y in meters
- * @param {number} [options.topRadius=0.012] - Radius at the top (+Y) junction end in meters
- * @param {number} [options.bottomRadius=0.013] - Radius at the bottom (-Y) base cup end in meters
- * @param {number} [options.waistRadius=0.0105] - Radius at the narrowest grip waist in meters
- * @param {number} [options.radialSegments=32] - Number of radial subdivisions around Y
- * @param {number} [options.profileSteps=16] - Number of subdivisions along the ergonomic profile
- * @param {number} [options.filletRadius=0.002] - Radius of rounded end transitions in meters
+ * @param {object} [options={}] - Optional parameters
+ * @param {number} [options.topY] - Top elevation along Y
+ * @param {number} [options.bottomY] - Bottom elevation along Y
+ * @param {number} [options.neckRadius] - Neck radius at top
+ * @param {number} [options.bulgeY] - Bulge elevation
+ * @param {number} [options.bulgeRadius] - Bulge radius
+ * @param {number} [options.baseFlareRadius] - Base flare radius at bottom
+ * @param {number} [options.length] - Custom length override
+ * @param {number} [options.radialSegments=32] - Number of radial subdivisions
+ * @param {number} [options.profileSteps=24] - Number of subdivisions along profile
  * @returns {LatheGeometry} The generated handle geometry
  */
 export function createHandleGeometry(options = {}) {
@@ -333,31 +329,38 @@ export function createHandleGeometry(options = {}) {
         throw new TypeError('createHandleGeometry: options must be an object.');
     }
 
-    const length = options.length ?? DEFAULT_HANDLE_LENGTH;
-    if (!Number.isFinite(length) || length <= 0) {
+    let topY = options.topY ?? kenGeometry.stem.topY;
+    let bottomY = options.bottomY ?? kenGeometry.stem.bottomY;
+
+    if (options.length !== undefined) {
+        if (!Number.isFinite(options.length) || options.length <= 0) {
+            throw new RangeError(
+                `createHandleGeometry: length must be a positive finite number (received: ${options.length}).`
+            );
+        }
+        const halfLen = options.length * 0.5;
+        bottomY = -halfLen;
+        topY = halfLen;
+    }
+
+    const neckRadius = options.neckRadius ?? (options.topRadius ?? kenGeometry.stem.neckRadius);
+    if (!Number.isFinite(neckRadius) || neckRadius <= 0) {
         throw new RangeError(
-            `createHandleGeometry: length must be a positive finite number (received: ${length}).`
+            `createHandleGeometry: neckRadius must be a positive finite number (received: ${neckRadius}).`
         );
     }
 
-    const topRadius = options.topRadius ?? DEFAULT_HANDLE_TOP_RADIUS;
-    if (!Number.isFinite(topRadius) || topRadius <= 0) {
+    const baseFlareRadius = options.baseFlareRadius ?? (options.bottomRadius ?? kenGeometry.stem.baseFlareRadius);
+    if (!Number.isFinite(baseFlareRadius) || baseFlareRadius <= 0) {
         throw new RangeError(
-            `createHandleGeometry: topRadius must be a positive finite number (received: ${topRadius}).`
+            `createHandleGeometry: baseFlareRadius must be a positive finite number (received: ${baseFlareRadius}).`
         );
     }
 
-    const bottomRadius = options.bottomRadius ?? DEFAULT_HANDLE_BOTTOM_RADIUS;
-    if (!Number.isFinite(bottomRadius) || bottomRadius <= 0) {
+    const bulgeRadius = options.bulgeRadius ?? (options.waistRadius ?? kenGeometry.stem.bulgeRadius);
+    if (!Number.isFinite(bulgeRadius) || bulgeRadius <= 0) {
         throw new RangeError(
-            `createHandleGeometry: bottomRadius must be a positive finite number (received: ${bottomRadius}).`
-        );
-    }
-
-    const waistRadius = options.waistRadius ?? DEFAULT_HANDLE_WAIST_RADIUS;
-    if (!Number.isFinite(waistRadius) || waistRadius <= 0) {
-        throw new RangeError(
-            `createHandleGeometry: waistRadius must be a positive finite number (received: ${waistRadius}).`
+            `createHandleGeometry: bulgeRadius must be a positive finite number (received: ${bulgeRadius}).`
         );
     }
 
@@ -375,63 +378,59 @@ export function createHandleGeometry(options = {}) {
         );
     }
 
-    const filletRadius = options.filletRadius ?? DEFAULT_HANDLE_FILLET_RADIUS;
-    if (!Number.isFinite(filletRadius) || filletRadius <= 0) {
-        throw new RangeError(
-            `createHandleGeometry: filletRadius must be a positive finite number (received: ${filletRadius}).`
-        );
+    if (options.filletRadius !== undefined) {
+        if (!Number.isFinite(options.filletRadius) || options.filletRadius <= 0) {
+            throw new RangeError(
+                `createHandleGeometry: filletRadius must be a positive finite number (received: ${options.filletRadius}).`
+            );
+        }
+        const maxFillet = Math.min(neckRadius, baseFlareRadius, Math.abs(topY - bottomY) * 0.25);
+        if (options.filletRadius >= maxFillet) {
+            throw new RangeError(
+                `createHandleGeometry: filletRadius (${options.filletRadius}) must be less than min(neckRadius, baseFlareRadius, length * 0.25) (${maxFillet}).`
+            );
+        }
     }
 
-    const maxFillet = Math.min(topRadius, bottomRadius, length * 0.25);
-    if (filletRadius >= maxFillet) {
-        throw new RangeError(
-            `createHandleGeometry: filletRadius (${filletRadius}) must be less than min(topRadius, bottomRadius, length * 0.25) (${maxFillet}).`
-        );
-    }
+    const bulgeY = options.bulgeY ?? (
+        options.length !== undefined
+            ? bottomY + (topY - bottomY) * 0.42
+            : kenGeometry.stem.bulgeY
+    );
 
-    const halfLen = length * 0.5;
     const points = [];
 
-    // 1. Bottom end center (r=0, y=-halfLen)
-    points.push(new Vector2(0.0, -halfLen));
+    // 1. Bottom end center (r=0, y=bottomY)
+    points.push(new Vector2(0.0, bottomY));
 
-    // 2. Bottom rounded end transition (fillet)
-    const filletSteps = 4;
-    for (let i = 1; i <= filletSteps; i++) {
-        const angle = (i / filletSteps) * (Math.PI * 0.5);
-        const r = (bottomRadius - filletRadius) + filletRadius * Math.sin(angle);
-        const y = -halfLen + filletRadius * (1.0 - Math.cos(angle));
+    // 2. Bottom outer edge
+    points.push(new Vector2(baseFlareRadius, bottomY));
+
+    // 3. Lower segment: from bottomY to bulgeY
+    const steps1 = Math.max(2, Math.floor(profileSteps * 0.5));
+    for (let i = 1; i <= steps1; i++) {
+        const t = i / steps1;
+        const y = bottomY + (bulgeY - bottomY) * t;
+        const blend = 0.5 - 0.5 * Math.cos(t * Math.PI);
+        const r = baseFlareRadius + (bulgeRadius - baseFlareRadius) * blend;
         points.push(new Vector2(r, y));
     }
 
-    // 3. Ergonomic body profile: bottom flare -> waist dip -> top flare
-    const yStart = -halfLen + filletRadius;
-    const yEnd = halfLen - filletRadius;
-    const bodyHeight = yEnd - yStart;
-    const waistT = 0.42; // slightly below midpoint where the grip naturally rests
-
-    for (let i = 1; i < profileSteps; i++) {
-        const t = i / profileSteps;
-        const y = yStart + bodyHeight * t;
-        let r;
-        if (t <= waistT) {
-            const u = t / waistT;
-            r = bottomRadius - (bottomRadius - waistRadius) * (0.5 - 0.5 * Math.cos(u * Math.PI));
-        } else {
-            const u = (t - waistT) / (1.0 - waistT);
-            r = waistRadius + (topRadius - waistRadius) * (0.5 - 0.5 * Math.cos(u * Math.PI));
-        }
+    // 4. Upper segment: from bulgeY to topY
+    const steps2 = Math.max(2, Math.floor(profileSteps * 0.5));
+    for (let i = 1; i < steps2; i++) {
+        const t = i / steps2;
+        const y = bulgeY + (topY - bulgeY) * t;
+        const blend = 0.5 - 0.5 * Math.cos(t * Math.PI);
+        const r = bulgeRadius + (neckRadius - bulgeRadius) * blend;
         points.push(new Vector2(r, y));
     }
 
-    // 4. Top rounded end transition (fillet) into (r=0, y=+halfLen)
-    for (let i = filletSteps; i >= 1; i--) {
-        const angle = (i / filletSteps) * (Math.PI * 0.5);
-        const r = (topRadius - filletRadius) + filletRadius * Math.sin(angle);
-        const y = halfLen - filletRadius * (1.0 - Math.cos(angle));
-        points.push(new Vector2(r, y));
-    }
-    points.push(new Vector2(0.0, halfLen));
+    // 5. Top outer edge
+    points.push(new Vector2(neckRadius, topY));
+
+    // 6. Top end center (r=0, y=topY)
+    points.push(new Vector2(0.0, topY));
 
     const geometry = new LatheGeometry(points, radialSegments);
     filterDegenerateTriangles(geometry);
@@ -441,44 +440,35 @@ export function createHandleGeometry(options = {}) {
 }
 
 /**
- * Creates the procedural kendama crossbar (Sarado) connecting geometry.
+ * Creates the procedural kendama crossbar (Sarado) connecting geometry matching kenGeometry.crossbar.
  *
- * The crossbar is generated centered at (0, 0, 0) in its local coordinate system
- * with its main axis running horizontally along the X-axis:
- * - Positive X wing extends toward the Big Cup mounting base at x = +0.04411 m.
- * - Negative X wing extends toward the Small Cup mounting base at x = -0.03911 m.
- * - Center junction (x = 0) aligns with the vertical Ken handle and spike axis.
- * - End mounting faces are angled to match Person A's configured cup normals:
- *   +X mounting face normal: normalized (+0.33, +0.944, 0)
- *   -X mounting face normal: normalized (-0.33, +0.944, 0)
+ * Origin (0, 0, 0) is the center of the crossbar junction:
+ * - Extends along +X towards Big Cup at +halfWidth (+0.06075 m)
+ * - Extends along -X towards Small Cup at -halfWidth (-0.06075 m)
+ * - Waist radius at center x = 0 is waistRadius (0.0165 m)
+ * - Outward mounting face at +X points along +X (1, 0, 0)
+ * - Outward mounting face at -X points along -X (-1, 0, 0)
  *
- * This provides 100% flush, gapless mounting surfaces that seat the Big Cup and
- * Small Cup without floating bowls, interpenetrations, or artificial stalks.
- *
- * Generates a 100% closed, watertight 2-manifold surface with 0 boundary edges.
- *
- * @param {object} [options={}] - Optional dimensional and visual parameters
- * @param {number} [options.length] - Optional total span along X (proportional scaling)
- * @param {number} [options.bigSpan=0.04411] - Distance from center to Big Cup mounting face in meters
- * @param {number} [options.smallSpan=0.03911] - Distance from center to Small Cup mounting face in meters
- * @param {number} [options.centerRadius=0.013] - Radius at central handle junction in meters
- * @param {number} [options.endRadius] - Common radius at both wing ends in meters (overrides big/small)
- * @param {number} [options.bigEndRadius=0.01785] - Radius of Big Cup mounting face in meters
- * @param {number} [options.smallEndRadius=0.01620] - Radius of Small Cup mounting face in meters
- * @param {number} [options.radialSegments=32] - Number of radial subdivisions around crossbar axis
- * @param {number} [options.wingSteps=12] - Number of subdivisions along each wing
- * @param {number} [options.profileSteps] - Legacy alias for wing steps
- * @param {number} [options.filletRadius] - Legacy fillet radius parameter (validated)
- * @returns {BufferGeometry} The generated crossbar geometry oriented along the X-axis
+ * @param {object} [options={}] - Optional dimensional parameters
+ * @param {number} [options.halfWidth] - Half-width along X
+ * @param {number} [options.bigSpan] - Distance to +X mounting face
+ * @param {number} [options.smallSpan] - Distance to -X mounting face
+ * @param {number} [options.centerRadius] - Waist radius at center
+ * @param {number} [options.waistRadius] - Alias for centerRadius
+ * @param {number} [options.bigEndRadius] - Mounting radius for Big Cup
+ * @param {number} [options.smallEndRadius] - Mounting radius for Small Cup
+ * @param {number} [options.endRadius] - Common end radius
+ * @param {number} [options.radialSegments=32] - Radial subdivisions
+ * @param {number} [options.wingSteps=12] - Subdivisions along each wing
+ * @returns {BufferGeometry} The generated crossbar geometry oriented along X
  */
 export function createCrossbarGeometry(options = {}) {
     if (options !== null && typeof options !== 'object') {
         throw new TypeError('createCrossbarGeometry: options must be an object.');
     }
 
-    // Determine wing spans
-    let bigSpan = options.bigSpan ?? DEFAULT_CROSSBAR_BIG_SPAN;
-    let smallSpan = options.smallSpan ?? DEFAULT_CROSSBAR_SMALL_SPAN;
+    let bigSpan = options.bigSpan ?? (options.halfWidth ?? kenGeometry.crossbar.halfWidth);
+    let smallSpan = options.smallSpan ?? (options.halfWidth ?? kenGeometry.crossbar.halfWidth);
 
     if (options.length !== undefined) {
         if (!Number.isFinite(options.length) || options.length <= 0) {
@@ -486,9 +476,8 @@ export function createCrossbarGeometry(options = {}) {
                 `createCrossbarGeometry: length must be a positive finite number (received: ${options.length}).`
             );
         }
-        const scale = options.length / DEFAULT_CROSSBAR_SPAN;
-        bigSpan = DEFAULT_CROSSBAR_BIG_SPAN * scale;
-        smallSpan = DEFAULT_CROSSBAR_SMALL_SPAN * scale;
+        bigSpan = options.length * 0.5;
+        smallSpan = options.length * 0.5;
     }
 
     if (!Number.isFinite(bigSpan) || bigSpan <= 0) {
@@ -502,29 +491,26 @@ export function createCrossbarGeometry(options = {}) {
         );
     }
 
-    const centerRadius = options.centerRadius ?? DEFAULT_CROSSBAR_CENTER_RADIUS;
+    const centerRadius = options.centerRadius ?? (options.waistRadius ?? kenGeometry.crossbar.waistRadius);
     if (!Number.isFinite(centerRadius) || centerRadius <= 0) {
         throw new RangeError(
             `createCrossbarGeometry: centerRadius must be a positive finite number (received: ${centerRadius}).`
         );
     }
 
-    const bigEndRadius = options.bigEndRadius ?? (options.endRadius ?? DEFAULT_CROSSBAR_BIG_END_RADIUS);
+    const bigEndRadius = options.bigEndRadius ?? (options.endRadius ?? kenGeometry.crossbar.endRadius);
     if (!Number.isFinite(bigEndRadius) || bigEndRadius <= 0) {
         throw new RangeError(
             `createCrossbarGeometry: bigEndRadius must be a positive finite number (received: ${bigEndRadius}).`
         );
     }
 
-    const smallEndRadius = options.smallEndRadius ?? (options.endRadius ?? DEFAULT_CROSSBAR_SMALL_END_RADIUS);
+    const smallEndRadius = options.smallEndRadius ?? (options.endRadius ?? cupConfigs.small.rimRadius);
     if (!Number.isFinite(smallEndRadius) || smallEndRadius <= 0) {
         throw new RangeError(
             `createCrossbarGeometry: smallEndRadius must be a positive finite number (received: ${smallEndRadius}).`
         );
     }
-
-    const bigWaistRadius = options.bigWingWaist ?? Math.min(centerRadius, bigEndRadius) * 0.92;
-    const smallWaistRadius = options.smallWingWaist ?? Math.min(centerRadius, smallEndRadius) * 0.90;
 
     const radialSegments = options.radialSegments ?? DEFAULT_CROSSBAR_RADIAL_SEGMENTS;
     if (!Number.isInteger(radialSegments) || radialSegments < 8) {
@@ -541,7 +527,7 @@ export function createCrossbarGeometry(options = {}) {
         }
     }
 
-    const wingSteps = options.wingSteps ?? (options.profileSteps ? Math.max(4, Math.floor(options.profileSteps * 0.75)) : DEFAULT_CROSSBAR_WING_STEPS);
+    const wingSteps = options.wingSteps ?? (options.profileSteps ? Math.floor(options.profileSteps * 0.75) : DEFAULT_CROSSBAR_WING_STEPS);
     if (!Number.isInteger(wingSteps) || wingSteps < 4) {
         throw new RangeError(
             `createCrossbarGeometry: wingSteps must be an integer >= 4 (received: ${wingSteps}).`
@@ -562,18 +548,6 @@ export function createCrossbarGeometry(options = {}) {
         }
     }
 
-    // Configured cup normal orientations (tilted 19.27 deg outward from +Y)
-    const normLen = Math.hypot(0.33, 0.944);
-    const bigNormX = 0.33 / normLen;
-    const bigNormY = 0.944 / normLen;
-    const smallNormX = -0.33 / normLen;
-    const smallNormY = 0.944 / normLen;
-
-    const targetAngleSmall = Math.atan2(smallNormY, smallNormX); // ~ 109.27 deg
-    const centerAngleSmall = Math.PI;                           // 180 deg
-    const targetAngleBig = Math.atan2(bigNormY, bigNormX);       // ~ 70.73 deg
-    const centerAngleBig = 0.0;                                 // 0 deg
-
     const xBig = bigSpan;
     const xSmall = -smallSpan;
     const rings = [];
@@ -582,28 +556,11 @@ export function createCrossbarGeometry(options = {}) {
     for (let i = 0; i <= wingSteps; i++) {
         const u = i / wingSteps;
         const x = xSmall * (1.0 - u);
-
-        const tMount = Math.max(0.0, 1.0 - u);
-        const angleBlend = Math.pow(tMount, 1.5);
-        const curAngle = centerAngleSmall + (targetAngleSmall - centerAngleSmall) * angleBlend;
-
-        const nx = Math.cos(curAngle);
-        const ny = Math.sin(curAngle);
-        const ux = -ny;
-        const uy = nx;
-
-        let r;
-        if (u <= 0.5) {
-            const v = u / 0.5;
-            r = smallEndRadius - (smallEndRadius - smallWaistRadius) * (0.5 - 0.5 * Math.cos(v * Math.PI));
-        } else {
-            const v = (u - 0.5) / 0.5;
-            r = smallWaistRadius + (centerRadius - smallWaistRadius) * (0.5 - 0.5 * Math.cos(v * Math.PI));
-        }
+        const blend = 0.5 - 0.5 * Math.cos(u * Math.PI);
+        const r = smallEndRadius + (centerRadius - smallEndRadius) * blend;
 
         rings.push({
             center: new Vector3(x, 0.0, 0.0),
-            ux, uy,
             radius: r,
         });
     }
@@ -612,27 +569,11 @@ export function createCrossbarGeometry(options = {}) {
     for (let i = 1; i <= wingSteps; i++) {
         const u = i / wingSteps;
         const x = xBig * u;
-
-        const angleBlend = Math.pow(u, 1.5);
-        const curAngle = centerAngleBig + (targetAngleBig - centerAngleBig) * angleBlend;
-
-        const nx = Math.cos(curAngle);
-        const ny = Math.sin(curAngle);
-        const ux = -ny;
-        const uy = nx;
-
-        let r;
-        if (u <= 0.5) {
-            const v = u / 0.5;
-            r = centerRadius - (centerRadius - bigWaistRadius) * (0.5 - 0.5 * Math.cos(v * Math.PI));
-        } else {
-            const v = (u - 0.5) / 0.5;
-            r = bigWaistRadius + (bigEndRadius - bigWaistRadius) * (0.5 - 0.5 * Math.cos(v * Math.PI));
-        }
+        const blend = 0.5 - 0.5 * Math.cos(u * Math.PI);
+        const r = centerRadius + (bigEndRadius - centerRadius) * blend;
 
         rings.push({
             center: new Vector3(x, 0.0, 0.0),
-            ux, uy,
             radius: r,
         });
     }
@@ -642,36 +583,33 @@ export function createCrossbarGeometry(options = {}) {
 
     for (let rIdx = 0; rIdx < numRings; rIdx++) {
         const ring = rings[rIdx];
-        const ux = ring.ux;
-        const uy = ring.uy;
         const radius = ring.radius;
-        const zSign = rIdx <= wingSteps ? -1.0 : 1.0;
 
         for (let s = 0; s < radialSegments; s++) {
             const theta = (s / radialSegments) * Math.PI * 2;
             const cosT = Math.cos(theta);
             const sinT = Math.sin(theta);
 
-            const px = ring.center.x + radius * (ux * cosT);
-            const py = ring.center.y + radius * (uy * cosT);
-            const pz = ring.center.z + radius * sinT * zSign;
+            const px = ring.center.x;
+            const py = ring.center.y + radius * cosT;
+            const pz = ring.center.z + radius * sinT;
 
             positions.push(px, py, pz);
         }
     }
 
-    // Small cap center vertex
+    // Small cap center vertex at xSmall (-X normal: -1, 0, 0)
     const smallCapCenterIdx = positions.length / 3;
     positions.push(rings[0].center.x, rings[0].center.y, rings[0].center.z);
 
-    // Big cap center vertex
+    // Big cap center vertex at xBig (+X normal: +1, 0, 0)
     const bigCapCenterIdx = positions.length / 3;
     const lastRing = rings[rings.length - 1];
     positions.push(lastRing.center.x, lastRing.center.y, lastRing.center.z);
 
     const indices = [];
 
-    // Cylinder quad strips: outward normal (a, b, d) and (b, c, d)
+    // Cylinder quad strips: outward normal
     for (let rIdx = 0; rIdx < numRings - 1; rIdx++) {
         const ring0Start = rIdx * radialSegments;
         const ring1Start = (rIdx + 1) * radialSegments;
@@ -689,13 +627,13 @@ export function createCrossbarGeometry(options = {}) {
         }
     }
 
-    // Small cap fan: edge nextS -> s
+    // Small cap fan facing -X: edge nextS -> s
     for (let s = 0; s < radialSegments; s++) {
         const nextS = (s + 1) % radialSegments;
         indices.push(smallCapCenterIdx, nextS, s);
     }
 
-    // Big cap fan: edge s -> nextS
+    // Big cap fan facing +X: edge s -> nextS
     const lastRingStart = (numRings - 1) * radialSegments;
     for (let s = 0; s < radialSegments; s++) {
         const nextS = (s + 1) % radialSegments;
@@ -711,20 +649,18 @@ export function createCrossbarGeometry(options = {}) {
 }
 
 /**
- * Creates the procedural kendama spike (Kensaki) geometry.
+ * Creates the procedural kendama spike (Kensaki) geometry matching kenGeometry.spike.
  *
- * The spike is generated ascending vertically along the Y-axis:
- * - Base at y = 0 with radius rootRadius.
- * - Conical taper extending upward.
- * - Rounded hemispherical tip at y = length (matching Person A's spike target).
- *
- * Watertight 2-manifold mesh with zero degenerate triangles.
+ * The spike ascends vertically along the Y-axis:
+ * - Base at y = 0 with radius rootRadius
+ * - Conical taper extending upward
+ * - Rounded hemispherical tip at y = length
  *
  * @param {object} [options={}] - Optional dimensional parameters
- * @param {number} [options.length=0.09615] - Length of spike from base to tip in meters
- * @param {number} [options.rootRadius=0.0070] - Radius at the spike base shoulder in meters
- * @param {number} [options.tipRadius=0.0015] - Radius of rounded tip in meters
- * @param {number} [options.radialSegments=32] - Number of radial subdivisions around Y
+ * @param {number} [options.length] - Length of spike from base to tip (0.0345 m)
+ * @param {number} [options.rootRadius] - Root radius at spike shoulder (0.01125 m)
+ * @param {number} [options.tipRadius] - Radius of rounded tip (0.00225 m)
+ * @param {number} [options.radialSegments=32] - Number of radial subdivisions
  * @returns {LatheGeometry} The generated spike geometry
  */
 export function createSpikeGeometry(options = {}) {
@@ -732,14 +668,14 @@ export function createSpikeGeometry(options = {}) {
         throw new TypeError('createSpikeGeometry: options must be an object.');
     }
 
-    const length = options.length ?? DEFAULT_SPIKE_LENGTH;
+    const length = options.length ?? (kenGeometry.spike.tipY - kenGeometry.spike.baseY);
     if (!Number.isFinite(length) || length <= 0) {
         throw new RangeError(
             `createSpikeGeometry: length must be a positive finite number (received: ${length}).`
         );
     }
 
-    const rootRadius = options.rootRadius ?? DEFAULT_SPIKE_ROOT_RADIUS;
+    const rootRadius = options.rootRadius ?? kenGeometry.stem.neckRadius;
     if (!Number.isFinite(rootRadius) || rootRadius <= 0) {
         throw new RangeError(
             `createSpikeGeometry: rootRadius must be a positive finite number (received: ${rootRadius}).`
@@ -761,14 +697,12 @@ export function createSpikeGeometry(options = {}) {
     }
 
     const points = [];
-    // 1. Base flat center at r = 0, y = 0
     points.push(new Vector2(0.0, 0.0));
-    // 2. Base shoulder corner
     points.push(new Vector2(rootRadius, 0.0));
-    // 3. Conical body taper up to hemisphere equator
+
     const coneHeight = length - tipRadius;
     points.push(new Vector2(tipRadius, coneHeight));
-    // 4. Rounded tip hemispherical cap
+
     const tipSteps = 4;
     for (let i = 1; i <= tipSteps; i++) {
         const angle = (i / tipSteps) * (Math.PI * 0.5);
@@ -785,21 +719,24 @@ export function createSpikeGeometry(options = {}) {
 }
 
 /**
- * Derives the spike length required to reach the configured spike tip position
- * given the Sarado crossbar elevation.
+ * Derives the spike length required to reach the configured spike tip position.
  *
  * @param {object} spikeConfig - Spike configuration from cupConfigs.js
- * @param {number} [saradoElevationY=DEFAULT_SARADO_ELEVATION_Y] - Vertical elevation of Sarado crossbar
- * @returns {number} Length of spike from crossbar junction to tip in meters
+ * @param {number} [baseY=DEFAULT_SPIKE_BASE_Y] - Vertical elevation of spike base
+ * @returns {number} Length of spike from base to tip in meters
  */
-export function deriveSpikeLength(spikeConfig, saradoElevationY = DEFAULT_SARADO_ELEVATION_Y) {
-    if (!spikeConfig || !spikeConfig.position || typeof spikeConfig.position.y !== 'number') {
-        throw new TypeError('deriveSpikeLength: spikeConfig must have a numeric position.y');
+export function deriveSpikeLength(spikeConfig = cupConfigs.spike, baseY = DEFAULT_SPIKE_BASE_Y) {
+    if (!spikeConfig) {
+        throw new TypeError('deriveSpikeLength: spikeConfig must be provided');
     }
-    const length = spikeConfig.position.y - saradoElevationY;
+    const tipY = spikeConfig.localPos?.y ?? spikeConfig.position?.y;
+    if (typeof tipY !== 'number') {
+        throw new TypeError('deriveSpikeLength: spikeConfig must have a numeric position.y or localPos.y');
+    }
+    const length = tipY - baseY;
     if (length <= 0) {
         throw new RangeError(
-            `deriveSpikeLength: spike tip (${spikeConfig.position.y}) must be higher than sarado elevation (${saradoElevationY})`
+            `deriveSpikeLength: spike tip (${tipY}) must be higher than base (${baseY})`
         );
     }
     return length;
@@ -807,27 +744,17 @@ export function deriveSpikeLength(spikeConfig, saradoElevationY = DEFAULT_SARADO
 
 /**
  * Derives the handle length, center Y position, and end elevations needed to
- * cleanly connect between the Base Cup outer bottom and the Sarado crossbar junction.
+ * cleanly connect between the Base Cup and the Sarado crossbar junction.
  *
- * @param {object} baseCupConfig - Base cup configuration from cupConfigs.js
+ * @param {object} [baseCupConfig=cupConfigs.base] - Base cup configuration
  * @param {object} [options={}] - Geometry options
- * @param {number} [options.saradoElevationY=DEFAULT_SARADO_ELEVATION_Y] - Sarado crossbar elevation
- * @param {number} [options.wallThickness=DEFAULT_WALL_THICKNESS] - Wall thickness of the base cup
+ * @param {number} [options.topY=DEFAULT_STEM_TOP_Y] - Top elevation of stem
+ * @param {number} [options.bottomY=DEFAULT_STEM_BOTTOM_Y] - Bottom elevation of stem
  * @returns {{ length: number, centerY: number, bottomY: number, topY: number }}
  */
-export function deriveHandleDimensions(baseCupConfig, options = {}) {
-    if (!baseCupConfig || !baseCupConfig.position || typeof baseCupConfig.position.y !== 'number') {
-        throw new TypeError('deriveHandleDimensions: baseCupConfig must have a numeric position.y');
-    }
-    const saradoElevationY = options.saradoElevationY ?? DEFAULT_SARADO_ELEVATION_Y;
-    const wallThickness = options.wallThickness ?? DEFAULT_WALL_THICKNESS;
-    const depth = baseCupConfig.depth ?? 0.03;
-
-    // The inverted base cup aperture is at baseCupConfig.position.y (-0.090 m)
-    // with its outer base extending upward by (depth + wallThickness) = 0.033 m to y = -0.0570 m.
-    const outerDepth = depth + wallThickness;
-    const bottomY = baseCupConfig.position.y + outerDepth;
-    const topY = saradoElevationY;
+export function deriveHandleDimensions(baseCupConfig = cupConfigs.base, options = {}) {
+    const topY = options.topY ?? kenGeometry.stem.topY;
+    const bottomY = options.bottomY ?? (baseCupConfig?.localPos?.y ?? (baseCupConfig?.position?.y ?? kenGeometry.stem.bottomY));
     const length = topY - bottomY;
     const centerY = (topY + bottomY) * 0.5;
 

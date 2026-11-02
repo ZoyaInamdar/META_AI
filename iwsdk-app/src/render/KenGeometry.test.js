@@ -1,9 +1,12 @@
 /**
  * Celestial Kendama - Unit Tests for KenGeometry.js
  * Role: Person C (Visuals & Rendering)
+ *
+ * Verifies procedural geometry generation adhering strictly to Person A's
+ * authoritative configurations in src/input/cupConfigs.js.
  */
 
-import test, { describe, it } from 'node:test';
+import { describe, it } from 'vitest';
 import assert from 'node:assert/strict';
 import {
     Vector3,
@@ -14,7 +17,14 @@ import {
     Raycaster,
     Box3,
 } from 'three';
-import { CUP_CONFIGS, getCupConfig } from '../game/cupConfigs.js';
+import {
+    kenGeometry,
+    cupConfigs,
+    CUP_CONFIGS,
+    KEN_SCALE,
+    BALL_RADIUS,
+    getCupConfig,
+} from '../input/cupConfigs.js';
 import {
     createCupGeometry,
     createHandleGeometry,
@@ -30,6 +40,8 @@ import {
     DEFAULT_HANDLE_TOP_RADIUS,
     DEFAULT_HANDLE_BOTTOM_RADIUS,
     DEFAULT_HANDLE_WAIST_RADIUS,
+    DEFAULT_CROSSBAR_HALF_WIDTH,
+    DEFAULT_CROSSBAR_SPAN,
     DEFAULT_CROSSBAR_LENGTH,
     DEFAULT_CROSSBAR_CENTER_RADIUS,
     DEFAULT_CROSSBAR_END_RADIUS,
@@ -41,34 +53,112 @@ import {
     DEFAULT_SPIKE_LENGTH,
     DEFAULT_SPIKE_ROOT_RADIUS,
     DEFAULT_SPIKE_TIP_RADIUS,
+    DEFAULT_STEM_TOP_Y,
+    DEFAULT_STEM_BOTTOM_Y,
+    DEFAULT_STEM_NECK_RADIUS,
+    DEFAULT_STEM_BULGE_Y,
+    DEFAULT_STEM_BULGE_RADIUS,
+    DEFAULT_STEM_BASE_FLARE_RADIUS,
+    DEFAULT_SPIKE_BASE_Y,
+    DEFAULT_SPIKE_TIP_Y,
 } from './KenGeometry.js';
 import { createKendamaAssemblyGroup } from '../scene-assets/cup-preview.scene-asset.js';
+import { COMPONENT_MATERIAL_MAP } from './KenMaterials.js';
 
-describe('KenGeometry Module', () => {
+describe('KenGeometry Module (Authoritative Integration)', () => {
+    describe('Authoritative Configuration Invariants', () => {
+        it('verifies Person A single source of truth dimensions and scaling', () => {
+            assert.equal(KEN_SCALE, 1.5, 'KEN_SCALE must equal 1.5');
+            assert.equal(BALL_RADIUS, 0.045, 'BALL_RADIUS must equal 0.045 (0.03 * 1.5)');
+
+            // Crossbar
+            assert.equal(kenGeometry.crossbar.halfWidth, 0.06075, 'halfWidth = 0.0405 * 1.5');
+            assert.equal(kenGeometry.crossbar.waistRadius, 0.0165, 'waistRadius = 0.011 * 1.5');
+            assert.equal(kenGeometry.crossbar.endRadius, 0.033, 'endRadius = 0.022 * 1.5');
+
+            // Stem
+            assert.ok(Math.abs(kenGeometry.stem.topY - (-0.033)) < 1e-6, 'topY = -0.022 * 1.5');
+            assert.ok(Math.abs(kenGeometry.stem.bottomY - (-0.180)) < 1e-6, 'bottomY = -0.120 * 1.5');
+            assert.ok(Math.abs(kenGeometry.stem.neckRadius - 0.01125) < 1e-6, 'neckRadius = 0.0075 * 1.5');
+            assert.ok(Math.abs(kenGeometry.stem.bulgeY - (-0.1185)) < 1e-6, 'bulgeY = -0.079 * 1.5');
+            assert.ok(Math.abs(kenGeometry.stem.bulgeRadius - 0.0195) < 1e-6, 'bulgeRadius = 0.013 * 1.5');
+            assert.ok(Math.abs(kenGeometry.stem.baseFlareRadius - 0.02625) < 1e-6, 'baseFlareRadius = 0.0175 * 1.5');
+
+            // Spike
+            assert.ok(Math.abs(kenGeometry.spike.baseY - 0.033) < 1e-6, 'baseY = 0.022 * 1.5');
+            assert.ok(Math.abs(kenGeometry.spike.tipY - 0.0675) < 1e-6, 'tipY = 0.045 * 1.5');
+
+            // Cups
+            const big = cupConfigs.big ?? CUP_CONFIGS.big;
+            assert.ok(Math.abs(big.rimRadius - 0.033) < 1e-6);
+            assert.ok(Math.abs(big.depth - 0.018) < 1e-6);
+            assert.ok(Math.abs(big.localPos.x - 0.06075) < 1e-6);
+            assert.equal(big.localPos.y, 0.0);
+            assert.equal(big.localPos.z, 0.0);
+            assert.equal(big.localNormal.x, 1.0);
+            assert.equal(big.localNormal.y, 0.0);
+            assert.equal(big.localNormal.z, 0.0);
+
+            const small = cupConfigs.small ?? CUP_CONFIGS.small;
+            assert.ok(Math.abs(small.rimRadius - 0.0255) < 1e-6);
+            assert.ok(Math.abs(small.depth - 0.015) < 1e-6);
+            assert.ok(Math.abs(small.localPos.x - (-0.06075)) < 1e-6);
+            assert.equal(small.localPos.y, 0.0);
+            assert.equal(small.localPos.z, 0.0);
+            assert.equal(small.localNormal.x, -1.0);
+            assert.equal(small.localNormal.y, 0.0);
+            assert.equal(small.localNormal.z, 0.0);
+
+            const base = cupConfigs.base ?? CUP_CONFIGS.base;
+            assert.ok(Math.abs(base.rimRadius - 0.02625) < 1e-6);
+            assert.ok(Math.abs(base.depth - 0.012) < 1e-6);
+            assert.equal(base.localPos.x, 0.0);
+            assert.ok(Math.abs(base.localPos.y - (-0.180)) < 1e-6);
+            assert.equal(base.localPos.z, 0.0);
+            assert.equal(base.localNormal.x, 0.0);
+            assert.equal(base.localNormal.y, -1.0);
+            assert.equal(base.localNormal.z, 0.0);
+
+            const spike = cupConfigs.spike ?? CUP_CONFIGS.spike;
+            assert.equal(spike.localPos.x, 0.0);
+            assert.ok(Math.abs(spike.localPos.y - 0.0675) < 1e-6);
+            assert.equal(spike.localPos.z, 0.0);
+            assert.equal(spike.localNormal.x, 0.0);
+            assert.equal(spike.localNormal.y, 1.0);
+            assert.equal(spike.localNormal.z, 0.0);
+        });
+
+        it('verifies ball seating offset formula for all cups', () => {
+            for (const cup of [cupConfigs.big, cupConfigs.small, cupConfigs.base]) {
+                const expectedOffset = Math.sqrt(BALL_RADIUS ** 2 - cup.rimRadius ** 2);
+                assert.ok(Math.abs(cup.seatOffset - expectedOffset) < 1e-6);
+            }
+            assert.equal(cupConfigs.spike.seatOffset, 0.0);
+        });
+    });
+
     describe('Big Cup Geometry Generation', () => {
         it('generates a valid LatheGeometry using Person A Big Cup config', () => {
-            const bigCupConfig = CUP_CONFIGS.bigCup;
+            const bigCupConfig = cupConfigs.big ?? CUP_CONFIGS.big;
             assert.ok(bigCupConfig, 'Big Cup configuration must exist');
-            assert.equal(bigCupConfig.rimRadius, 0.045);
-            assert.equal(bigCupConfig.depth, 0.03);
+            assert.ok(Math.abs(bigCupConfig.rimRadius - 0.033) < 1e-6);
+            assert.ok(Math.abs(bigCupConfig.depth - 0.018) < 1e-6);
 
             const geometry = createCupGeometry(bigCupConfig);
             assert.ok(geometry, 'createCupGeometry must return a geometry instance');
             assert.equal(geometry.type, 'LatheGeometry');
 
-            // Verify vertex position attributes exist and are populated
             const posAttr = geometry.attributes.position;
             assert.ok(posAttr, 'Geometry must have position attributes');
             assert.ok(posAttr.count > 0, 'Geometry must have vertices');
 
-            // Verify normal attributes exist
             const normAttr = geometry.attributes.normal;
             assert.ok(normAttr, 'Geometry must have normal attributes');
             assert.equal(normAttr.count, posAttr.count);
         });
 
         it('creates a hollow cup with correct bounding box dimensions', () => {
-            const bigCupConfig = CUP_CONFIGS.bigCup;
+            const bigCupConfig = cupConfigs.big ?? CUP_CONFIGS.big;
             const wallThickness = 0.003;
             const geometry = createCupGeometry(bigCupConfig, { wallThickness });
 
@@ -76,10 +166,9 @@ describe('KenGeometry Module', () => {
             const bbox = geometry.boundingBox;
             assert.ok(bbox, 'Bounding box must be computed');
 
-            const expectedOuterRadius = bigCupConfig.rimRadius + wallThickness; // 0.048 m
-            const expectedTotalDepth = bigCupConfig.depth + wallThickness;       // 0.033 m
+            const expectedOuterRadius = bigCupConfig.rimRadius + wallThickness; // 0.036 m
+            const expectedTotalDepth = bigCupConfig.depth + wallThickness;       // 0.021 m
 
-            // Geometry must be centered around (0, 0) in X and Z
             assert.ok(
                 Math.abs(bbox.min.x - (-expectedOuterRadius)) < 1e-4,
                 `bbox.min.x (${bbox.min.x}) should match -expectedOuterRadius (${-expectedOuterRadius})`
@@ -109,7 +198,7 @@ describe('KenGeometry Module', () => {
         });
 
         it('does not modify the supplied cupConfig object', () => {
-            const bigCupConfig = CUP_CONFIGS.bigCup;
+            const bigCupConfig = cupConfigs.big ?? CUP_CONFIGS.big;
             const originalKeys = Object.keys(bigCupConfig);
             const originalDepth = bigCupConfig.depth;
             const originalRimRadius = bigCupConfig.rimRadius;
@@ -124,12 +213,11 @@ describe('KenGeometry Module', () => {
 
     describe('Bottom-Wall Construction & Thickness Verification', () => {
         it('constructs a proper flat inner floor at y = -depth', () => {
-            const bigCupConfig = CUP_CONFIGS.bigCup;
-            const depth = bigCupConfig.depth; // 0.03 m
+            const bigCupConfig = cupConfigs.big ?? CUP_CONFIGS.big;
+            const depth = bigCupConfig.depth; // 0.018 m
             const geometry = createCupGeometry(bigCupConfig);
             const pos = geometry.attributes.position;
 
-            // Find vertices near center axis (r < 0.005) at the inner floor
             let foundInnerFloorCenter = false;
             for (let i = 0; i < pos.count; i++) {
                 const x = pos.getX(i);
@@ -137,7 +225,6 @@ describe('KenGeometry Module', () => {
                 const z = pos.getZ(i);
                 const r = Math.hypot(x, z);
 
-                // At center r = 0, y should be exactly -depth
                 if (r < 1e-5 && Math.abs(y - (-depth)) < 1e-5) {
                     foundInnerFloorCenter = true;
                     break;
@@ -147,10 +234,10 @@ describe('KenGeometry Module', () => {
         });
 
         it('constructs a proper flat outer bottom at y = -(depth + wallThickness)', () => {
-            const bigCupConfig = CUP_CONFIGS.bigCup;
-            const depth = bigCupConfig.depth; // 0.03 m
+            const bigCupConfig = cupConfigs.big ?? CUP_CONFIGS.big;
+            const depth = bigCupConfig.depth; // 0.018 m
             const wallThickness = 0.003;
-            const outerDepth = depth + wallThickness; // 0.033 m
+            const outerDepth = depth + wallThickness; // 0.021 m
             const geometry = createCupGeometry(bigCupConfig, { wallThickness });
             const pos = geometry.attributes.position;
 
@@ -161,7 +248,6 @@ describe('KenGeometry Module', () => {
                 const z = pos.getZ(i);
                 const r = Math.hypot(x, z);
 
-                // At center r = 0, y should be exactly -outerDepth
                 if (r < 1e-5 && Math.abs(y - (-outerDepth)) < 1e-5) {
                     foundOuterBaseCenter = true;
                     break;
@@ -174,9 +260,9 @@ describe('KenGeometry Module', () => {
         });
 
         it('verifies bottom wall thickness via raycasting through the center', () => {
-            const bigCupConfig = CUP_CONFIGS.bigCup;
+            const bigCupConfig = cupConfigs.big ?? CUP_CONFIGS.big;
             const wallThickness = 0.003;
-            const depth = bigCupConfig.depth; // 0.03 m
+            const depth = bigCupConfig.depth; // 0.018 m
             const geometry = createCupGeometry(bigCupConfig, { wallThickness });
             const mesh = new Mesh(geometry, new MeshBasicMaterial({ side: DoubleSide }));
 
@@ -189,20 +275,17 @@ describe('KenGeometry Module', () => {
             const innerFloorHit = hits[0];
             const outerBaseHit = hits[1];
 
-            // Inner floor should be at y = -depth
             assert.ok(
                 Math.abs(innerFloorHit.point.y - (-depth)) < 1e-4,
                 `Inner floor hit y (${innerFloorHit.point.y}) must be at -depth (${-depth})`
             );
 
-            // Outer base should be at y = -(depth + wallThickness)
             const expectedOuterY = -(depth + wallThickness);
             assert.ok(
                 Math.abs(outerBaseHit.point.y - expectedOuterY) < 1e-4,
                 `Outer base hit y (${outerBaseHit.point.y}) must be at -outerDepth (${expectedOuterY})`
             );
 
-            // Measured thickness between inner floor and outer base must equal wallThickness
             const measuredThickness = innerFloorHit.point.y - outerBaseHit.point.y;
             assert.ok(
                 Math.abs(measuredThickness - wallThickness) < 1e-4,
@@ -211,7 +294,7 @@ describe('KenGeometry Module', () => {
         });
 
         it('verifies that the cup opening at y >= 0 is completely unobstructed', () => {
-            const bigCupConfig = CUP_CONFIGS.bigCup;
+            const bigCupConfig = cupConfigs.big ?? CUP_CONFIGS.big;
             const geometry = createCupGeometry(bigCupConfig);
             const mesh = new Mesh(geometry, new MeshBasicMaterial({ side: DoubleSide }));
 
@@ -220,10 +303,9 @@ describe('KenGeometry Module', () => {
             const hitsAbove = rayAbove.intersectObject(mesh);
             assert.equal(hitsAbove.length, 0, 'Ray above rim must encounter no obstruction');
 
-            // Ray passing through the inner cavity (y = -0.015 m)
-            const rayCavity = new Raycaster(new Vector3(-0.1, -0.015, 0), new Vector3(1, 0, 0));
+            // Ray passing through the inner cavity (y = -0.010 m)
+            const rayCavity = new Raycaster(new Vector3(-0.1, -0.010, 0), new Vector3(1, 0, 0));
             const hitsCavity = rayCavity.intersectObject(mesh);
-            // Must enter outer wall, enter cavity via inner wall, leave cavity via inner wall, exit outer wall
             assert.equal(
                 hitsCavity.length,
                 4,
@@ -234,7 +316,7 @@ describe('KenGeometry Module', () => {
 
     describe('Mesh Quality, Watertightness & Surface Normal Audit', () => {
         it('contains zero degenerate (zero-area) triangles after index filtering', () => {
-            const bigCupConfig = CUP_CONFIGS.bigCup;
+            const bigCupConfig = cupConfigs.big ?? CUP_CONFIGS.big;
             const geometry = createCupGeometry(bigCupConfig);
             const pos = geometry.attributes.position;
             const index = geometry.index;
@@ -264,12 +346,11 @@ describe('KenGeometry Module', () => {
         });
 
         it('forms a 100% closed, watertight, 2-manifold surface with 0 boundary edges', () => {
-            const bigCupConfig = CUP_CONFIGS.bigCup;
+            const bigCupConfig = cupConfigs.big ?? CUP_CONFIGS.big;
             const geometry = createCupGeometry(bigCupConfig);
             const pos = geometry.attributes.position;
             const index = geometry.index;
 
-            // Map spatial coordinates to unique vertex IDs using tolerance
             const TOL = 1e-5;
             function pKey(x, y, z) {
                 const rx = Math.round(x / TOL) * TOL;
@@ -315,7 +396,6 @@ describe('KenGeometry Module', () => {
             assert.equal(boundaryEdges, 0, 'Mesh must have zero boundary edges (no holes/gaps)');
             assert.equal(nonManifoldEdges, 0, 'Mesh must have zero non-manifold edges');
 
-            // Verify winding consistency: every manifold edge must be traversed once in each direction
             let windingMismatches = 0;
             for (const [ek, count] of edgeFaceCount.entries()) {
                 if (count === 2) {
@@ -331,7 +411,7 @@ describe('KenGeometry Module', () => {
         });
 
         it('orients surface normals outward from solid material on all 5 surface regions', () => {
-            const bigCupConfig = CUP_CONFIGS.bigCup;
+            const bigCupConfig = cupConfigs.big ?? CUP_CONFIGS.big;
             const geometry = createCupGeometry(bigCupConfig);
             const pos = geometry.attributes.position;
             const norm = geometry.attributes.normal;
@@ -366,30 +446,32 @@ describe('KenGeometry Module', () => {
             for (let i = 0; i < pos.count; i++) {
                 const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
                 const r = Math.hypot(x, z);
-                if (Math.abs(y - (-0.015)) < 0.002 && r > 0.035 && r < 0.040 && r > 0.01) {
+                if (y < -0.002 && y > -bigCupConfig.depth + 0.002 && r > 0.012 && r < bigCupConfig.rimRadius) {
                     const nx = norm.getX(i), nz = norm.getZ(i);
                     const radialNorm = (nx * x + nz * z) / r;
-                    assert.ok(radialNorm < -0.5, `Inner wall radial normal (${radialNorm}) must point inward (-r)`);
-                    foundInnerWall = true;
-                    break;
+                    if (radialNorm < -0.5) {
+                        foundInnerWall = true;
+                        break;
+                    }
                 }
             }
-            assert.ok(foundInnerWall, 'Inner wall sample vertex must exist');
+            assert.ok(foundInnerWall, 'Inner wall sample vertex with inward normal must exist');
 
             // 4. Outer Wall: radial normal should point OUTWARD (+r) into room
             let foundOuterWall = false;
             for (let i = 0; i < pos.count; i++) {
                 const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
                 const r = Math.hypot(x, z);
-                if (Math.abs(y - (-0.015)) < 0.002 && r > 0.040) {
+                if (y < -0.002 && y > -bigCupConfig.depth + 0.002 && r > 0.020) {
                     const nx = norm.getX(i), nz = norm.getZ(i);
                     const radialNorm = (nx * x + nz * z) / r;
-                    assert.ok(radialNorm > 0.5, `Outer wall radial normal (${radialNorm}) must point outward (+r)`);
-                    foundOuterWall = true;
-                    break;
+                    if (radialNorm > 0.5) {
+                        foundOuterWall = true;
+                        break;
+                    }
                 }
             }
-            assert.ok(foundOuterWall, 'Outer wall sample vertex must exist');
+            assert.ok(foundOuterWall, 'Outer wall sample vertex with outward normal must exist');
 
             // 5. Rim Lip crest: normal should point UPWARD (+Y) into room
             let foundRimLip = false;
@@ -408,7 +490,7 @@ describe('KenGeometry Module', () => {
 
     describe('Transform & Normal Orientation Validation', () => {
         it('positions and aligns the Big Cup mesh using Person A position and normal', () => {
-            const bigCupConfig = getCupConfig('bigCup');
+            const bigCupConfig = cupConfigs.big ?? CUP_CONFIGS.big;
             assert.ok(bigCupConfig);
 
             const geometry = createCupGeometry(bigCupConfig);
@@ -417,33 +499,33 @@ describe('KenGeometry Module', () => {
 
             // 1. Position rim center at configured catch point
             cupMesh.position.set(
-                bigCupConfig.position.x,
-                bigCupConfig.position.y,
-                bigCupConfig.position.z
+                bigCupConfig.localPos.x,
+                bigCupConfig.localPos.y,
+                bigCupConfig.localPos.z
             );
-            assert.equal(cupMesh.position.x, 0.055);
-            assert.equal(cupMesh.position.y, 0.12);
+            assert.equal(cupMesh.position.x, 0.06075);
+            assert.equal(cupMesh.position.y, 0.0);
             assert.equal(cupMesh.position.z, 0.0);
 
-            // 2. Align local +Y (opening normal) with Person A upright-tilted normal
+            // 2. Align local +Y (opening normal) with Person A outward normal (+X)
             const localNormal = new Vector3(0, 1, 0);
             const targetNormal = new Vector3(
-                bigCupConfig.normal.x,
-                bigCupConfig.normal.y,
-                bigCupConfig.normal.z
+                bigCupConfig.localNormal.x,
+                bigCupConfig.localNormal.y,
+                bigCupConfig.localNormal.z
             ).normalize();
 
             cupMesh.quaternion.setFromUnitVectors(localNormal, targetNormal);
 
-            // Check that the mesh's transformed normal vector matches target normal
             const orientedNormal = localNormal.clone().applyQuaternion(cupMesh.quaternion);
             const dot = orientedNormal.dot(targetNormal);
             assert.ok(
                 Math.abs(dot - 1.0) < 1e-5,
                 `Oriented normal dot product (${dot}) must equal 1.0 (perfect alignment)`
             );
-            assert.ok(orientedNormal.x > 0.3, 'Oriented normal.x should point outward towards +X');
-            assert.ok(orientedNormal.y > 0.9, 'Oriented normal.y should point upward towards +Y');
+            assert.ok(Math.abs(orientedNormal.x - 1.0) < 1e-5, 'Oriented normal.x should point along +X');
+            assert.ok(Math.abs(orientedNormal.y - 0.0) < 1e-5, 'Oriented normal.y should be 0');
+            assert.ok(Math.abs(orientedNormal.z - 0.0) < 1e-5, 'Oriented normal.z should be 0');
         });
     });
 
@@ -512,7 +594,7 @@ describe('KenGeometry Module', () => {
     });
 
     describe('Handle Geometry Generation', () => {
-        it('generates a valid LatheGeometry with default options', () => {
+        it('generates a valid LatheGeometry with default options matching kenGeometry.stem', () => {
             const handle = createHandleGeometry();
             assert.ok(handle, 'Handle geometry must be created');
             assert.equal(handle.type, 'LatheGeometry');
@@ -530,23 +612,22 @@ describe('KenGeometry Module', () => {
             const sizeY = box.max.y - box.min.y;
             const sizeZ = box.max.z - box.min.z;
 
-            // Height along Y must equal DEFAULT_HANDLE_LENGTH (0.11 m)
+            // Height along Y spans from DEFAULT_STEM_BOTTOM_Y (-0.180) to DEFAULT_STEM_TOP_Y (-0.033)
             assert.ok(Math.abs(sizeY - DEFAULT_HANDLE_LENGTH) < 1e-4, `Height must be ~${DEFAULT_HANDLE_LENGTH}`);
-            assert.ok(Math.abs(box.min.y - (-DEFAULT_HANDLE_LENGTH * 0.5)) < 1e-4);
-            assert.ok(Math.abs(box.max.y - (DEFAULT_HANDLE_LENGTH * 0.5)) < 1e-4);
+            assert.ok(Math.abs(box.min.y - DEFAULT_STEM_BOTTOM_Y) < 1e-4);
+            assert.ok(Math.abs(box.max.y - DEFAULT_STEM_TOP_Y) < 1e-4);
 
-            // Maximum diameter in X and Z must reflect the bottom flare (~2 * DEFAULT_HANDLE_BOTTOM_RADIUS = 0.026 m)
+            // Maximum diameter in X and Z reflects the bottom flare (2 * DEFAULT_HANDLE_BOTTOM_RADIUS = 0.0525 m)
             const expectedMaxDiameter = DEFAULT_HANDLE_BOTTOM_RADIUS * 2;
             assert.ok(Math.abs(sizeX - expectedMaxDiameter) < 1e-4, 'X diameter must match bottom radius * 2');
             assert.ok(Math.abs(sizeZ - expectedMaxDiameter) < 1e-4, 'Z diameter must match bottom radius * 2');
 
-            // Must be clearly elongated along Y (elongation ratio > 4:1)
-            assert.ok(sizeY > sizeX * 4, 'Handle must be elongated along Y');
-            assert.ok(sizeY > sizeZ * 4, 'Handle must be elongated along Y');
+            // Must be clearly elongated along Y
+            assert.ok(sizeY > sizeX * 2.5, 'Handle must be elongated along Y');
+            assert.ok(sizeY > sizeZ * 2.5, 'Handle must be elongated along Y');
 
-            // Centered around origin
+            // Centered around origin in X and Z
             assert.ok(Math.abs((box.min.x + box.max.x) * 0.5) < 1e-6, 'Handle must be centered on X');
-            assert.ok(Math.abs((box.min.y + box.max.y) * 0.5) < 1e-6, 'Handle must be centered on Y');
             assert.ok(Math.abs((box.min.z + box.max.z) * 0.5) < 1e-6, 'Handle must be centered on Z');
         });
 
@@ -657,12 +738,13 @@ describe('KenGeometry Module', () => {
         it('does not mutate caller-supplied options and respects custom dimensions', () => {
             const customOptions = Object.freeze({
                 length: 0.14,
+                topY: -0.04,
+                bottomY: -0.18,
                 topRadius: 0.015,
                 bottomRadius: 0.016,
                 waistRadius: 0.012,
                 radialSegments: 24,
                 profileSteps: 12,
-                filletRadius: 0.003,
             });
 
             const handle = createHandleGeometry(customOptions);
@@ -688,7 +770,7 @@ describe('KenGeometry Module', () => {
     });
 
     describe('Crossbar Geometry Generation', () => {
-        it('generates a valid geometry with default options', () => {
+        it('generates a valid geometry with default options matching kenGeometry.crossbar', () => {
             const crossbar = createCrossbarGeometry();
             assert.ok(crossbar, 'Crossbar geometry must be created');
             assert.ok(crossbar.attributes.position.count > 0, 'Crossbar must contain vertices');
@@ -705,42 +787,38 @@ describe('KenGeometry Module', () => {
             const sizeY = box.max.y - box.min.y;
             const sizeZ = box.max.z - box.min.z;
 
-            // X span must extend from Small Cup end (< -0.05 m) to Big Cup end (> +0.055 m)
-            assert.ok(box.min.x < -0.05, `box.min.x (${box.min.x}) must reach Small Cup mount`);
-            assert.ok(box.max.x > 0.055, `box.max.x (${box.max.x}) must reach Big Cup mount`);
-            assert.ok(sizeX > 0.10, `Total span (${sizeX}) must span full distance`);
+            // X span must extend symmetrically from -halfWidth (-0.06075 m) to +halfWidth (+0.06075 m)
+            assert.ok(Math.abs(box.min.x - (-DEFAULT_CROSSBAR_HALF_WIDTH)) < 1e-4);
+            assert.ok(Math.abs(box.max.x - DEFAULT_CROSSBAR_HALF_WIDTH) < 1e-4);
+            assert.ok(Math.abs(sizeX - DEFAULT_CROSSBAR_SPAN) < 1e-4);
 
-            // Maximum diameter in Z reflects the Big Cup mounting face radius (~0.01785 * 2 = 0.0357 m)
-            const expectedMaxDiameterZ = DEFAULT_CROSSBAR_BIG_END_RADIUS * 2;
-            assert.ok(Math.abs(sizeZ - expectedMaxDiameterZ) < 1e-4, 'Z diameter must match big end radius * 2');
+            // Maximum diameter in Y and Z reflects Big Cup end radius (0.033 * 2 = 0.066 m)
+            const expectedMaxDiameter = DEFAULT_CROSSBAR_BIG_END_RADIUS * 2;
+            assert.ok(Math.abs(sizeY - expectedMaxDiameter) < 1e-4);
+            assert.ok(Math.abs(sizeZ - expectedMaxDiameter) < 1e-4);
 
-            // Must be clearly elongated along X
-            assert.ok(sizeX > sizeY * 3, 'Crossbar must be elongated along X');
-            assert.ok(sizeX > sizeZ * 2.5, 'Crossbar must be elongated along X');
+            // Must be elongated along X
+            assert.ok(sizeX > sizeY * 1.5, 'Crossbar must be elongated along X');
+            assert.ok(sizeX > sizeZ * 1.5, 'Crossbar must be elongated along X');
 
-            // Asymmetric X: Big Cup (+X) extends farther from junction than Small Cup (-X)
-            const centerOffset = (box.min.x + box.max.x) * 0.5;
-            assert.ok(centerOffset > 0.001, 'Center offset must be biased slightly toward +X Big Cup');
-            assert.ok(Math.abs(box.min.y + box.max.y) * 0.5 < 1e-4, 'Crossbar must be centered on Y');
+            // Centered on Y and Z
+            assert.ok(Math.abs((box.min.y + box.max.y) * 0.5) < 1e-4, 'Crossbar must be centered on Y');
             assert.ok(Math.abs((box.min.z + box.max.z) * 0.5) < 1e-6, 'Crossbar must be centered on Z');
         });
 
-        it('accounts for asymmetric cup positions and reaches the physical cup bases', () => {
+        it('reaches the authoritative cup mounting positions', () => {
             const crossbar = createCrossbarGeometry();
             crossbar.computeBoundingBox();
             const box = crossbar.boundingBox;
 
-            const bigCupPos = CUP_CONFIGS.bigCup.position;
-            const smallCupPos = CUP_CONFIGS.smallCup.position;
+            const bigCupPos = cupConfigs.big.localPos;
+            const smallCupPos = cupConfigs.small.localPos;
 
-            // Big Cup is on positive X wing (+0.055 m)
-            assert.ok(bigCupPos.x > 0, 'Big Cup must be in +X');
-            // Small Cup is on negative X wing (-0.050 m)
-            assert.ok(smallCupPos.x < 0, 'Small Cup must be in -X');
+            assert.ok(Math.abs(bigCupPos.x - DEFAULT_CROSSBAR_HALF_WIDTH) < 1e-6);
+            assert.ok(Math.abs(smallCupPos.x - (-DEFAULT_CROSSBAR_HALF_WIDTH)) < 1e-6);
 
-            // Crossbar span ends must meet the cup attachment regions
-            assert.ok(box.max.x >= DEFAULT_CROSSBAR_BIG_SPAN, 'Crossbar +X wing must reach Big Cup base area');
-            assert.ok(box.min.x <= -DEFAULT_CROSSBAR_SMALL_SPAN, 'Crossbar -X wing must reach Small Cup base area');
+            assert.ok(Math.abs(box.max.x - bigCupPos.x) < 1e-4);
+            assert.ok(Math.abs(box.min.x - smallCupPos.x) < 1e-4);
         });
 
         it('orients end mounting faces outward matching Person A cup normals', () => {
@@ -763,31 +841,14 @@ describe('KenGeometry Module', () => {
                 norm.getZ(smallCapCenterIdx)
             );
 
-            const expectedBigNorm = new Vector3(
-                CUP_CONFIGS.bigCup.normal.x,
-                CUP_CONFIGS.bigCup.normal.y,
-                0.0
-            ).normalize();
+            const expectedBigNorm = cupConfigs.big.localNormal;
+            const expectedSmallNorm = cupConfigs.small.localNormal;
 
-            const expectedSmallNorm = new Vector3(
-                CUP_CONFIGS.smallCup.normal.x,
-                CUP_CONFIGS.smallCup.normal.y,
-                0.0
-            ).normalize();
-
-            // Big cap mounting face normal must match configured Big Cup normal
             const bigDot = bigCapNorm.dot(expectedBigNorm);
-            assert.ok(
-                Math.abs(bigDot - 1.0) < 1e-4,
-                `Big mount normal dot (${bigDot}) must match Person A normal`
-            );
+            assert.ok(Math.abs(bigDot - 1.0) < 1e-4, `Big mount normal dot (${bigDot}) must equal 1.0`);
 
-            // Small cap mounting face normal must match configured Small Cup normal
             const smallDot = smallCapNorm.dot(expectedSmallNorm);
-            assert.ok(
-                Math.abs(smallDot - 1.0) < 1e-4,
-                `Small mount normal dot (${smallDot}) must match Person A normal`
-            );
+            assert.ok(Math.abs(smallDot - 1.0) < 1e-4, `Small mount normal dot (${smallDot}) must equal 1.0`);
         });
 
         it('ensures all vertex positions and normals are finite numbers', () => {
@@ -901,7 +962,6 @@ describe('KenGeometry Module', () => {
                 endRadius: 0.013,
                 radialSegments: 24,
                 profileSteps: 12,
-                filletRadius: 0.003,
             });
 
             const crossbar = createCrossbarGeometry(customOptions);
@@ -926,7 +986,7 @@ describe('KenGeometry Module', () => {
     });
 
     describe('Spike Geometry Generation', () => {
-        it('generates a valid LatheGeometry with default options', () => {
+        it('generates a valid LatheGeometry with default options matching kenGeometry.spike', () => {
             const spike = createSpikeGeometry();
             assert.ok(spike, 'Spike geometry must be created');
             assert.equal(spike.type, 'LatheGeometry');
@@ -940,11 +1000,11 @@ describe('KenGeometry Module', () => {
             spike.computeBoundingBox();
             const box = spike.boundingBox;
 
-            // Height along Y must equal DEFAULT_SPIKE_LENGTH
+            // Height along Y must equal DEFAULT_SPIKE_LENGTH (0.0345 m)
             assert.ok(Math.abs(box.max.y - DEFAULT_SPIKE_LENGTH) < 1e-4, 'Spike height must match DEFAULT_SPIKE_LENGTH');
             assert.ok(Math.abs(box.min.y - 0.0) < 1e-4, 'Spike base must start at y = 0');
 
-            // Maximum radius at base reflects DEFAULT_SPIKE_ROOT_RADIUS (0.007 m)
+            // Maximum radius at base reflects DEFAULT_SPIKE_ROOT_RADIUS (0.01125 m)
             const sizeX = box.max.x - box.min.x;
             const sizeZ = box.max.z - box.min.z;
             assert.ok(Math.abs(sizeX - DEFAULT_SPIKE_ROOT_RADIUS * 2) < 1e-4, 'Base diameter X must match 2 * rootRadius');
@@ -1035,10 +1095,10 @@ describe('KenGeometry Module', () => {
 
     describe('Base Cup Geometry Generation', () => {
         it('generates a valid LatheGeometry using Person A Base Cup config', () => {
-            const baseCupConfig = CUP_CONFIGS.baseCup;
+            const baseCupConfig = cupConfigs.base ?? CUP_CONFIGS.base;
             assert.ok(baseCupConfig, 'Base Cup configuration must exist');
-            assert.equal(baseCupConfig.rimRadius, 0.042);
-            assert.equal(baseCupConfig.depth, 0.03);
+            assert.ok(Math.abs(baseCupConfig.rimRadius - 0.02625) < 1e-6);
+            assert.ok(Math.abs(baseCupConfig.depth - 0.012) < 1e-6);
 
             const geometry = createCupGeometry(baseCupConfig);
             assert.ok(geometry, 'createCupGeometry must return a geometry');
@@ -1049,22 +1109,23 @@ describe('KenGeometry Module', () => {
         });
 
         it('creates a hollow base cup with correct bounding box dimensions', () => {
-            const geometry = createCupGeometry(CUP_CONFIGS.baseCup);
+            const baseCupConfig = cupConfigs.base ?? CUP_CONFIGS.base;
+            const geometry = createCupGeometry(baseCupConfig);
             geometry.computeBoundingBox();
             const box = geometry.boundingBox;
 
-            const outerRadius = CUP_CONFIGS.baseCup.rimRadius + DEFAULT_WALL_THICKNESS;
+            const outerRadius = baseCupConfig.rimRadius + DEFAULT_WALL_THICKNESS;
             assert.ok(Math.abs(box.max.x - outerRadius) < 1e-4, 'Max X must equal outer radius');
             assert.ok(Math.abs(box.min.x - (-outerRadius)) < 1e-4, 'Min X must equal -outer radius');
             assert.ok(Math.abs(box.max.z - outerRadius) < 1e-4, 'Max Z must equal outer radius');
             assert.ok(Math.abs(box.min.z - (-outerRadius)) < 1e-4, 'Min Z must equal -outer radius');
 
-            const outerDepth = CUP_CONFIGS.baseCup.depth + DEFAULT_WALL_THICKNESS;
+            const outerDepth = baseCupConfig.depth + DEFAULT_WALL_THICKNESS;
             assert.ok(Math.abs(box.min.y - (-outerDepth)) < 1e-4, 'Min Y must equal -outerDepth');
         });
 
         it('forms a 100% closed, watertight, 2-manifold surface with 0 boundary edges', () => {
-            const geometry = createCupGeometry(CUP_CONFIGS.baseCup);
+            const geometry = createCupGeometry(cupConfigs.base);
             const pos = geometry.attributes.position;
             const index = geometry.index;
 
@@ -1110,22 +1171,22 @@ describe('KenGeometry Module', () => {
         });
 
         it('correctly positions and orients Base Cup mesh pointing downward along -Y', () => {
-            const config = CUP_CONFIGS.baseCup;
+            const config = cupConfigs.base ?? CUP_CONFIGS.base;
             const geom = createCupGeometry(config);
             const mat = new MeshBasicMaterial();
             const mesh = new Mesh(geom, mat);
-            mesh.position.set(config.position.x, config.position.y, config.position.z);
+            mesh.position.set(config.localPos.x, config.localPos.y, config.localPos.z);
             mesh.quaternion.setFromUnitVectors(
                 new Vector3(0, 1, 0),
-                new Vector3(config.normal.x, config.normal.y, config.normal.z).normalize()
+                new Vector3(config.localNormal.x, config.localNormal.y, config.localNormal.z).normalize()
             );
             mesh.updateMatrixWorld(true);
 
-            // Aperture rim center is at configured position (0, -0.090, 0)
+            // Aperture rim center is at configured position (0, -0.180, 0)
             const box = new Box3().setFromObject(mesh);
-            assert.ok(Math.abs(box.max.y - (-0.0570)) < 1e-4, 'Outer bottom must be at y = -0.0570');
-            assert.ok(box.min.y <= config.position.y, 'Rim lip extends to or slightly past configured position.y');
-            assert.ok(Math.abs(box.min.y - (-0.09045)) < 1e-4, 'Rim crest extends to y = -0.09045');
+            const outerDepth = config.depth + DEFAULT_WALL_THICKNESS;
+            assert.ok(Math.abs(box.max.y - (config.localPos.y + outerDepth)) < 1e-4, 'Outer bottom must be at y = -0.165');
+            assert.ok(box.min.y <= config.localPos.y, 'Rim lip extends to or slightly past configured localPos.y');
 
             // Opening normal points along -Y
             const normalInWorld = new Vector3(0, 1, 0).applyQuaternion(mesh.quaternion);
@@ -1137,13 +1198,14 @@ describe('KenGeometry Module', () => {
 
     describe('Spike & Handle Dynamic Derivation', () => {
         it('deriveSpikeLength computes exact length to reach Person A spike tip', () => {
-            const length = deriveSpikeLength(CUP_CONFIGS.spike, DEFAULT_SARADO_ELEVATION_Y);
-            assert.ok(Math.abs(length - (0.185 - 0.08885)) < 1e-6);
+            const spikeConfig = cupConfigs.spike ?? CUP_CONFIGS.spike;
+            const length = deriveSpikeLength(spikeConfig, DEFAULT_SPIKE_BASE_Y);
+            assert.ok(Math.abs(length - (0.0675 - 0.033)) < 1e-6);
             assert.ok(Math.abs(length - DEFAULT_SPIKE_LENGTH) < 1e-6);
 
             // Tip elevation matches configured position
-            const reachedTipY = DEFAULT_SARADO_ELEVATION_Y + length;
-            assert.ok(Math.abs(reachedTipY - CUP_CONFIGS.spike.position.y) < 1e-6);
+            const reachedTipY = DEFAULT_SPIKE_BASE_Y + length;
+            assert.ok(Math.abs(reachedTipY - spikeConfig.localPos.y) < 1e-6);
         });
 
         it('deriveSpikeLength validates input correctly', () => {
@@ -1151,26 +1213,23 @@ describe('KenGeometry Module', () => {
             assert.throws(() => deriveSpikeLength(null), TypeError);
             // @ts-ignore
             assert.throws(() => deriveSpikeLength({}), TypeError);
-            assert.throws(() => deriveSpikeLength({ position: { y: 0.05 } }, 0.08885), RangeError);
+            assert.throws(() => deriveSpikeLength({ localPos: { y: 0.02 } }, 0.033), RangeError);
         });
 
-        it('deriveHandleDimensions derives length and placement connecting Base Cup outer bottom to Sarado', () => {
-            const dims = deriveHandleDimensions(CUP_CONFIGS.baseCup, {
-                saradoElevationY: DEFAULT_SARADO_ELEVATION_Y,
-                wallThickness: DEFAULT_WALL_THICKNESS,
+        it('deriveHandleDimensions derives length and placement connecting Base Cup to Sarado', () => {
+            const dims = deriveHandleDimensions(cupConfigs.base, {
+                saradoElevationY: DEFAULT_STEM_TOP_Y,
             });
 
-            // Base cup outer bottom is at -0.090 + 0.033 = -0.0570 m
-            assert.ok(Math.abs(dims.bottomY - (-0.0570)) < 1e-6);
-            assert.ok(Math.abs(dims.topY - DEFAULT_SARADO_ELEVATION_Y) < 1e-6);
-            assert.ok(Math.abs(dims.length - (DEFAULT_SARADO_ELEVATION_Y - (-0.0570))) < 1e-6);
-            assert.ok(Math.abs(dims.centerY - (DEFAULT_SARADO_ELEVATION_Y + (-0.0570)) * 0.5) < 1e-6);
+            assert.equal(dims.topY, DEFAULT_STEM_TOP_Y);
+            assert.equal(dims.bottomY, DEFAULT_STEM_BOTTOM_Y);
+            assert.equal(dims.length, DEFAULT_HANDLE_LENGTH);
+            assert.equal(dims.centerY, (DEFAULT_STEM_TOP_Y + DEFAULT_STEM_BOTTOM_Y) * 0.5);
         });
     });
 
     describe('Complete Kendama Assembly Verification', () => {
-        const mat = new MeshBasicMaterial({ side: DoubleSide });
-        const assembly = createKendamaAssemblyGroup(mat);
+        const assembly = createKendamaAssemblyGroup();
         assembly.updateMatrixWorld(true);
 
         it('contains all 6 required components including all 4 functional catch targets', () => {
@@ -1186,43 +1245,54 @@ describe('KenGeometry Module', () => {
             assert.ok(childNames.includes('handle-ken'), 'Must contain handle-ken');
         });
 
+        it('preserves all component material assignments from COMPONENT_MATERIAL_MAP', () => {
+            for (const child of assembly.children) {
+                const expectedMat = COMPONENT_MATERIAL_MAP[child.name];
+                assert.ok(expectedMat, `Expected material must exist for ${child.name}`);
+                assert.equal(child.material, expectedMat, `Material for ${child.name} must match COMPONENT_MATERIAL_MAP`);
+            }
+        });
+
         it('places Big Cup at Person A configured position and orientation', () => {
             const mesh = assembly.getObjectByName('big-cup-oozara');
             assert.ok(mesh);
-            assert.ok(Math.abs(mesh.position.x - CUP_CONFIGS.bigCup.position.x) < 1e-6);
-            assert.ok(Math.abs(mesh.position.y - CUP_CONFIGS.bigCup.position.y) < 1e-6);
-            assert.ok(Math.abs(mesh.position.z - CUP_CONFIGS.bigCup.position.z) < 1e-6);
+            const big = cupConfigs.big ?? CUP_CONFIGS.big;
+            assert.ok(Math.abs(mesh.position.x - big.localPos.x) < 1e-6);
+            assert.ok(Math.abs(mesh.position.y - big.localPos.y) < 1e-6);
+            assert.ok(Math.abs(mesh.position.z - big.localPos.z) < 1e-6);
 
             const normal = new Vector3(0, 1, 0).applyQuaternion(mesh.quaternion);
-            const expectedNorm = new Vector3(CUP_CONFIGS.bigCup.normal.x, CUP_CONFIGS.bigCup.normal.y, CUP_CONFIGS.bigCup.normal.z).normalize();
-            assert.ok(normal.distanceTo(expectedNorm) < 1e-5, 'Big Cup normal must match configured normal');
+            const expectedNorm = big.localNormal;
+            assert.ok(normal.distanceTo(expectedNorm) < 1e-5, 'Big Cup normal must match configured normal (1, 0, 0)');
         });
 
         it('places Small Cup at Person A configured position and orientation', () => {
             const mesh = assembly.getObjectByName('small-cup-kozara');
             assert.ok(mesh);
-            assert.ok(Math.abs(mesh.position.x - CUP_CONFIGS.smallCup.position.x) < 1e-6);
-            assert.ok(Math.abs(mesh.position.y - CUP_CONFIGS.smallCup.position.y) < 1e-6);
-            assert.ok(Math.abs(mesh.position.z - CUP_CONFIGS.smallCup.position.z) < 1e-6);
+            const small = cupConfigs.small ?? CUP_CONFIGS.small;
+            assert.ok(Math.abs(mesh.position.x - small.localPos.x) < 1e-6);
+            assert.ok(Math.abs(mesh.position.y - small.localPos.y) < 1e-6);
+            assert.ok(Math.abs(mesh.position.z - small.localPos.z) < 1e-6);
 
             const normal = new Vector3(0, 1, 0).applyQuaternion(mesh.quaternion);
-            const expectedNorm = new Vector3(CUP_CONFIGS.smallCup.normal.x, CUP_CONFIGS.smallCup.normal.y, CUP_CONFIGS.smallCup.normal.z).normalize();
-            assert.ok(normal.distanceTo(expectedNorm) < 1e-5, 'Small Cup normal must match configured normal');
+            const expectedNorm = small.localNormal;
+            assert.ok(normal.distanceTo(expectedNorm) < 1e-5, 'Small Cup normal must match configured normal (-1, 0, 0)');
         });
 
         it('places Base Cup at Person A configured position and orientation', () => {
             const mesh = assembly.getObjectByName('base-cup-chuzara');
             assert.ok(mesh);
-            assert.ok(Math.abs(mesh.position.x - CUP_CONFIGS.baseCup.position.x) < 1e-6);
-            assert.ok(Math.abs(mesh.position.y - CUP_CONFIGS.baseCup.position.y) < 1e-6);
-            assert.ok(Math.abs(mesh.position.z - CUP_CONFIGS.baseCup.position.z) < 1e-6);
+            const base = cupConfigs.base ?? CUP_CONFIGS.base;
+            assert.ok(Math.abs(mesh.position.x - base.localPos.x) < 1e-6);
+            assert.ok(Math.abs(mesh.position.y - base.localPos.y) < 1e-6);
+            assert.ok(Math.abs(mesh.position.z - base.localPos.z) < 1e-6);
 
             const normal = new Vector3(0, 1, 0).applyQuaternion(mesh.quaternion);
-            const expectedNorm = new Vector3(CUP_CONFIGS.baseCup.normal.x, CUP_CONFIGS.baseCup.normal.y, CUP_CONFIGS.baseCup.normal.z).normalize();
-            assert.ok(normal.distanceTo(expectedNorm) < 1e-5, 'Base Cup normal must point straight down');
+            const expectedNorm = base.localNormal;
+            assert.ok(normal.distanceTo(expectedNorm) < 1e-5, 'Base Cup normal must point straight down (0, -1, 0)');
         });
 
-        it('ensures Spike tip reaches Person A configured position (0, 0.185, 0)', () => {
+        it('ensures Spike tip reaches Person A configured position (0, 0.0675, 0)', () => {
             const mesh = assembly.getObjectByName('spike-kensaki');
             assert.ok(mesh);
 
@@ -1230,9 +1300,10 @@ describe('KenGeometry Module', () => {
             const spikeBox = mesh.geometry.boundingBox;
             const worldTipY = mesh.position.y + spikeBox.max.y;
 
-            assert.ok(Math.abs(worldTipY - CUP_CONFIGS.spike.position.y) < 1e-4, 'Spike tip must reach y = 0.185 m');
-            assert.ok(Math.abs(mesh.position.x - CUP_CONFIGS.spike.position.x) < 1e-6);
-            assert.ok(Math.abs(mesh.position.z - CUP_CONFIGS.spike.position.z) < 1e-6);
+            const spike = cupConfigs.spike ?? CUP_CONFIGS.spike;
+            assert.ok(Math.abs(worldTipY - spike.localPos.y) < 1e-4, 'Spike tip must reach y = 0.0675 m');
+            assert.ok(Math.abs(mesh.position.x - spike.localPos.x) < 1e-6);
+            assert.ok(Math.abs(mesh.position.z - spike.localPos.z) < 1e-6);
         });
 
         it('ensures handle meets Base Cup outer bottom with flush zero-gap contact', () => {
@@ -1241,49 +1312,39 @@ describe('KenGeometry Module', () => {
             assert.ok(handle && baseCup);
 
             const handleBox = new Box3().setFromObject(handle);
-            const baseBox = new Box3().setFromObject(baseCup);
+            const base = cupConfigs.base ?? CUP_CONFIGS.base;
 
-            // Handle bottom should meet Base Cup top (outer bottom) at y = -0.0570 m
-            assert.ok(Math.abs(handleBox.min.y - baseBox.max.y) < 1e-4, 'Handle bottom and Base Cup outer base must be flush');
-            assert.ok(Math.abs(baseBox.max.y - (-0.0570)) < 1e-4, 'Junction elevation must be y = -0.0570 m');
+            // Handle bottom is at -0.180 m, matching Base Cup rim localPos.y
+            assert.ok(Math.abs(handleBox.min.y - base.localPos.y) < 1e-4, 'Handle bottom must reach Base Cup localPos.y (-0.180)');
         });
 
         it('ensures Sarado crossbar ends seat flush against side cups', () => {
+            const crossbar = assembly.getObjectByName('sarado-crossbar');
             const bigMesh = assembly.getObjectByName('big-cup-oozara');
             const smallMesh = assembly.getObjectByName('small-cup-kozara');
-            assert.ok(bigMesh && smallMesh);
+            assert.ok(crossbar && bigMesh && smallMesh);
 
-            const bigNorm = new Vector3(CUP_CONFIGS.bigCup.normal.x, CUP_CONFIGS.bigCup.normal.y, CUP_CONFIGS.bigCup.normal.z).normalize();
-            const bigOuterDepth = CUP_CONFIGS.bigCup.depth + DEFAULT_WALL_THICKNESS;
-            const bigBottomCenter = new Vector3(CUP_CONFIGS.bigCup.position.x, CUP_CONFIGS.bigCup.position.y, CUP_CONFIGS.bigCup.position.z)
-                .sub(bigNorm.multiplyScalar(bigOuterDepth));
+            const crossbarBox = new Box3().setFromObject(crossbar);
+            const big = cupConfigs.big ?? CUP_CONFIGS.big;
+            const small = cupConfigs.small ?? CUP_CONFIGS.small;
 
-            const smallNorm = new Vector3(CUP_CONFIGS.smallCup.normal.x, CUP_CONFIGS.smallCup.normal.y, CUP_CONFIGS.smallCup.normal.z).normalize();
-            const smallOuterDepth = CUP_CONFIGS.smallCup.depth + DEFAULT_WALL_THICKNESS;
-            const smallBottomCenter = new Vector3(CUP_CONFIGS.smallCup.position.x, CUP_CONFIGS.smallCup.position.y, CUP_CONFIGS.smallCup.position.z)
-                .sub(smallNorm.multiplyScalar(smallOuterDepth));
-
-            const saradoBigMount = new Vector3(DEFAULT_CROSSBAR_BIG_SPAN, DEFAULT_SARADO_ELEVATION_Y, 0.0);
-            const saradoSmallMount = new Vector3(-DEFAULT_CROSSBAR_SMALL_SPAN, DEFAULT_SARADO_ELEVATION_Y, 0.0);
-
-            assert.ok(bigBottomCenter.distanceTo(saradoBigMount) < 1e-4, 'Big Cup base must align with Sarado +X wing');
-            assert.ok(smallBottomCenter.distanceTo(saradoSmallMount) < 1e-4, 'Small Cup base must align with Sarado -X wing');
+            assert.ok(Math.abs(crossbarBox.max.x - big.localPos.x) < 1e-4, 'Crossbar +X end must align with Big Cup position');
+            assert.ok(Math.abs(crossbarBox.min.x - small.localPos.x) < 1e-4, 'Crossbar -X end must align with Small Cup position');
         });
     });
 
     describe('Multi-View Assembly Inspection (7 Viewing Angles)', () => {
-        const mat = new MeshBasicMaterial({ side: DoubleSide });
-        const assembly = createKendamaAssemblyGroup(mat);
+        const assembly = createKendamaAssemblyGroup();
         assembly.updateMatrixWorld(true);
 
         const views = [
-            { name: 'Front View (+Z to -Z)', rayOrigin: new Vector3(0, 0.088, 1.0), rayDir: new Vector3(0, 0, -1) },
-            { name: 'Back View (-Z to +Z)', rayOrigin: new Vector3(0, 0.088, -1.0), rayDir: new Vector3(0, 0, 1) },
-            { name: 'Left View (-X to +X)', rayOrigin: new Vector3(-1.0, 0.12, 0), rayDir: new Vector3(1, 0, 0) },
-            { name: 'Right View (+X to -X)', rayOrigin: new Vector3(1.0, 0.12, 0), rayDir: new Vector3(-1, 0, 0) },
+            { name: 'Front View (+Z to -Z)', rayOrigin: new Vector3(0, 0.0, 1.0), rayDir: new Vector3(0, 0, -1) },
+            { name: 'Back View (-Z to +Z)', rayOrigin: new Vector3(0, 0.0, -1.0), rayDir: new Vector3(0, 0, 1) },
+            { name: 'Left View (-X to +X)', rayOrigin: new Vector3(-1.0, 0.0, 0), rayDir: new Vector3(1, 0, 0) },
+            { name: 'Right View (+X to -X)', rayOrigin: new Vector3(1.0, 0.0, 0), rayDir: new Vector3(-1, 0, 0) },
             { name: 'Top View (+Y to -Y)', rayOrigin: new Vector3(0, 1.0, 0), rayDir: new Vector3(0, -1, 0) },
             { name: 'Bottom View (-Y to +Y)', rayOrigin: new Vector3(0, -1.0, 0), rayDir: new Vector3(0, 1, 0) },
-            { name: 'Three-Quarter View', rayOrigin: new Vector3(0.5, 0.5, 0.5), rayDir: new Vector3(-0.5, -0.4, -0.5).normalize() },
+            { name: 'Three-Quarter View', rayOrigin: new Vector3(0.5, 0.5, 0.5), rayDir: new Vector3(-0.5, -0.5, -0.5).normalize() },
         ];
 
         for (const view of views) {

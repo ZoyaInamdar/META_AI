@@ -199,7 +199,7 @@ export class CupInspectionSystem extends createSystem({}) {
                 // Exclude preview children so plinthBox computes the plinth's actual visible stone slab geometry
                 const plinthBox = new Box3();
                 for (const child of plinth.children) {
-                    if (child !== cupNode && child.name !== 'cup-preview' && child.name !== 'big-cup-preview-root') {
+                    if (child !== cupNode && child.name !== 'cup-preview' && child.name !== 'big-cup-preview-root' && !child.name.endsWith('-preview-root')) {
                         plinthBox.expandByObject(child);
                     }
                 }
