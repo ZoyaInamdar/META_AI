@@ -160,4 +160,112 @@ describe('CatchFlow', () => {
         expect(secondRes).toBeNull();
         expect(flow.state).toBe('seated');
     });
+
+    it('c2. A CatchFlow.onLaunch() that is ignored (state is not "seated") does not store or change its flightId', () => {
+        flow.onLaunch(42);
+        expect(flow.flightId).toBe(42);
+        expect(flow.state).toBe('air');
+
+        // While in air, onLaunch is ignored and does not overwrite flightId
+        flow.onLaunch(99);
+        expect(flow.flightId).toBe(42);
+        expect(flow.state).toBe('air');
+    });
+
+    it('g. update(dt, kenPose, { position, velocity }) gives the same MISS and SEATED results as the old four-argument form for identical inputs', () => {
+        // Compare MISS results
+        const flowMissLegacy = new CatchFlow({ initialCup: CUP_IDS.SMALL_CUP, kenPose: originPose });
+        flowMissLegacy.onLaunch(101);
+        const missResLegacy = flowMissLegacy.update(0.016, originPose, { x: 0.0, y: -0.46, z: 0.0 }, { x: 0.0, y: -1.0, z: 0.0 });
+
+        const flowMissObject = new CatchFlow({ initialCup: CUP_IDS.SMALL_CUP, kenPose: originPose });
+        flowMissObject.onLaunch(101);
+        const missResObject = flowMissObject.update(0.016, originPose, {
+            position: { x: 0.0, y: -0.46, z: 0.0 },
+            velocity: { x: 0.0, y: -1.0, z: 0.0 },
+        });
+
+        expect(missResObject).toEqual(missResLegacy);
+        expect(missResObject).toEqual({ type: 'MISS', flightId: 101 });
+
+        // Compare with array vectors
+        const flowMissArray = new CatchFlow({ initialCup: CUP_IDS.SMALL_CUP, kenPose: originPose });
+        flowMissArray.onLaunch(101);
+        const missResArray = flowMissArray.update(0.016, originPose, {
+            position: [0.0, -0.46, 0.0],
+            velocity: [0.0, -1.0, 0.0],
+        });
+        expect(missResArray).toEqual(missResLegacy);
+
+        // Compare SEATED results
+        const flowSeatedLegacy = new CatchFlow({ initialCup: CUP_IDS.SPIKE, kenPose: originPose });
+        flowSeatedLegacy.onLaunch(202);
+        flowSeatedLegacy.onCatchConfirmed(CUP_IDS.BIG_CUP, { x: 0.1, y: 0.2, z: -0.1 });
+        const seatedResLegacy = flowSeatedLegacy.update(0.15, originPose, { x: 0.1, y: 0.2, z: -0.1 }, { x: 0, y: 0, z: 0 });
+
+        const flowSeatedObject = new CatchFlow({ initialCup: CUP_IDS.SPIKE, kenPose: originPose });
+        flowSeatedObject.onLaunch(202);
+        flowSeatedObject.onCatchConfirmed(CUP_IDS.BIG_CUP, { x: 0.1, y: 0.2, z: -0.1 });
+        const seatedResObject = flowSeatedObject.update(0.15, originPose, {
+            position: { x: 0.1, y: 0.2, z: -0.1 },
+            velocity: { x: 0, y: 0, z: 0 },
+        });
+
+        expect(seatedResObject).toEqual(seatedResLegacy);
+        expect(seatedResObject).toEqual({ type: 'SEATED', cupKey: CUP_IDS.BIG_CUP, flightId: 202 });
+    });
+
+    it('h. onLaunch(7) then a MISS: the result has flightId 7', () => {
+        flow.onLaunch(7);
+        const res = flow.update(0.016, originPose, {
+            position: { x: 0.0, y: -0.46, z: 0.0 },
+            velocity: { x: 0.0, y: -1.0, z: 0.0 },
+        });
+        expect(res).toEqual({ type: 'MISS', flightId: 7 });
+        expect(flow.flightId).toBe(7);
+    });
+
+    it('i. onLaunch(8) then a confirmed catch and 0.15 s of updates: the SEATED result has flightId 8', () => {
+        flow.onLaunch(8);
+        flow.onCatchConfirmed(CUP_IDS.BIG_CUP, { x: 0.1, y: 0.2, z: -0.1 });
+        const res = flow.update(0.15, originPose);
+        expect(res).toEqual({ type: 'SEATED', cupKey: CUP_IDS.BIG_CUP, flightId: 8 });
+        expect(flow.flightId).toBe(8);
+    });
+
+    it('j. A second update after a MISS returns null (no duplicate MISS for the same flight)', () => {
+        flow.onLaunch(15);
+        const missRes = flow.update(0.016, originPose, {
+            position: { x: 0.0, y: -0.46, z: 0.0 },
+            velocity: { x: 0.0, y: -1.0, z: 0.0 },
+        });
+        expect(missRes).toEqual({ type: 'MISS', flightId: 15 });
+
+        const secondRes = flow.update(0.016, originPose, {
+            position: { x: 0.0, y: -0.50, z: 0.0 },
+            velocity: { x: 0.0, y: -1.0, z: 0.0 },
+        });
+        expect(secondRes).toBeNull();
+    });
+
+    it('k. After a MISS, onLaunch(9) works and a new MISS has flightId 9', () => {
+        flow.onLaunch(5);
+        const miss1 = flow.update(0.016, originPose, {
+            position: { x: 0.0, y: -0.46, z: 0.0 },
+            velocity: { x: 0.0, y: -1.0, z: 0.0 },
+        });
+        expect(miss1).toEqual({ type: 'MISS', flightId: 5 });
+        expect(flow.state).toBe('seated');
+
+        flow.onLaunch(9);
+        expect(flow.state).toBe('air');
+        expect(flow.flightId).toBe(9);
+
+        const miss2 = flow.update(0.016, originPose, {
+            position: { x: 0.0, y: -0.46, z: 0.0 },
+            velocity: { x: 0.0, y: -1.0, z: 0.0 },
+        });
+        expect(miss2).toEqual({ type: 'MISS', flightId: 9 });
+        expect(flow.state).toBe('seated');
+    });
 });
