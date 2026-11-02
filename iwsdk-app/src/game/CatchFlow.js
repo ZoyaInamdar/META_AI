@@ -138,6 +138,32 @@ export function computeCupWorldSeatPoint(cupKey, kenPose) {
 }
 
 /**
+ * Resolves a 3D coordinate vector from {x, y, z} or [x, y, z].
+ *
+ * @param {any} v
+ * @returns {{ x: number, y: number, z: number } | null}
+ */
+function extractVec3(v) {
+    if (!v) return null;
+    if (Array.isArray(v)) {
+        return {
+            x: Number(v[0]) || 0.0,
+            y: Number(v[1]) || 0.0,
+            z: Number(v[2]) || 0.0,
+        };
+    }
+    if (typeof v === 'object') {
+        const x = v.x ?? 0.0;
+        const y = v.y ?? 0.0;
+        const z = v.z ?? 0.0;
+        if (Number.isFinite(x) || Number.isFinite(y) || Number.isFinite(z)) {
+            return { x, y, z };
+        }
+    }
+    return null;
+}
+
+/**
  * Manages the high-level catch flow states ('seated', 'air', 'catching'),
  * smooth ball seating interpolation, and miss boundary detection.
  */
@@ -160,9 +186,18 @@ export class CatchFlow {
         this._catchStartPos = { x: 0.0, y: 0.0, z: 0.0 };
 
         this._missReportedForFlight = false;
+        this._flightId = undefined;
 
         const initialSeat = computeCupWorldSeatPoint(this._seatCupKey, kenPose);
         this._ballPosition = { ...initialSeat };
+    }
+
+    /**
+     * Unique flight identifier associated with current launch.
+     * @returns {number|string|undefined}
+     */
+    get flightId() {
+        return this._flightId;
     }
 
     /**
@@ -192,14 +227,17 @@ export class CatchFlow {
     /**
      * Launches the ball into flight.
      * Transitions from 'seated' to 'air'. Ignored if not seated.
+     *
+     * @param {number|string} [flightId] - Optional flight identifier
      */
-    onLaunch() {
+    onLaunch(flightId = undefined) {
         if (this._state !== 'seated') {
             return;
         }
         this._state = 'air';
         this._previousSeatCupKey = this._seatCupKey;
         this._missReportedForFlight = false;
+        this._flightId = flightId;
     }
 
     /**
@@ -226,26 +264,26 @@ export class CatchFlow {
      *
      * @param {number} dt - Frame delta time in seconds
      * @param {any} kenPose - Ken pose object (position and orientation)
-     * @param {any} [ballPositionOrState] - Ball position or trajectory state
-     * @param {{ x?: number, y?: number, z?: number }} [ballVelocity] - Ball velocity vector
-     * @returns {null | { type: 'SEATED', cupKey: string } | { type: 'MISS' }}
+     * @param {any} [ballOrPosition] - Ball state { position, velocity } or position
+     * @param {{ x?: number, y?: number, z?: number }} [ballVelocity] - Legacy ball velocity vector
+     * @returns {null | { type: 'SEATED', cupKey: string, flightId?: any } | { type: 'MISS', flightId?: any }}
      */
-    update(dt, kenPose, ballPositionOrState = null, ballVelocity = null) {
+    update(dt, kenPose, ballOrPosition = null, ballVelocity = null) {
         const kenPos = getKenWorldPosition(kenPose);
 
-        // Resolve external ball position and velocity if provided
+        // Resolve external ball position and velocity:
+        // New signature: ball = { position, velocity }
+        // Backward compatibility: 3rd arg is position/state, 4th arg is velocity
         let extPos = null;
         let extVel = null;
 
-        if (ballPositionOrState) {
-            if (ballPositionOrState.position && ballPositionOrState.velocity) {
-                extPos = ballPositionOrState.position;
-                extVel = ballPositionOrState.velocity;
-            } else if (Number.isFinite(ballPositionOrState.x)) {
-                extPos = ballPositionOrState;
-                if (ballVelocity && Number.isFinite(ballVelocity.x)) {
-                    extVel = ballVelocity;
-                }
+        if (ballOrPosition) {
+            if (ballOrPosition.position !== undefined) {
+                extPos = extractVec3(ballOrPosition.position);
+                extVel = extractVec3(ballOrPosition.velocity);
+            } else {
+                extPos = extractVec3(ballOrPosition);
+                extVel = extractVec3(ballVelocity);
             }
         }
 
@@ -274,7 +312,7 @@ export class CatchFlow {
                 this._seatCupKey = this._previousSeatCupKey;
                 const seatPoint = computeCupWorldSeatPoint(this._seatCupKey, kenPose);
                 this._ballPosition = { ...seatPoint };
-                return { type: 'MISS' };
+                return { type: 'MISS', flightId: this._flightId };
             }
 
             return null;
@@ -291,7 +329,7 @@ export class CatchFlow {
                 this._seatCupKey = this._targetCupKey;
                 const completedCup = this._seatCupKey;
                 this._targetCupKey = null;
-                return { type: 'SEATED', cupKey: completedCup };
+                return { type: 'SEATED', cupKey: completedCup, flightId: this._flightId };
             }
 
             // S-curve or linear interpolation towards current moving seat point

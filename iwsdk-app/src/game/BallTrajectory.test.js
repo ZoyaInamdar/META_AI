@@ -250,4 +250,67 @@ describe('BallTrajectory Module', () => {
             assert.equal(trajectory.mode, 'seated');
         });
     });
+
+    describe('Flight Counter & Reset', () => {
+        it('a. A fresh trajectory has flightId 0 before any launch', () => {
+            const trajectory = new BallTrajectory();
+            assert.equal(trajectory.flightId, 0);
+        });
+
+        it('b. After the first launch flightId is 1; after a second launch it is 2', () => {
+            const trajectory = new BallTrajectory();
+            trajectory.launch({ x: 0, y: 0, z: 0 });
+            assert.equal(trajectory.flightId, 1);
+            trajectory.launch({ x: 0, y: 0, z: 0 });
+            assert.equal(trajectory.flightId, 2);
+        });
+
+        it('c. A launch while a flight is in progress restarts the flight AND increments flightId', () => {
+            const trajectory = new BallTrajectory();
+            trajectory.launch({ x: 0, y: 0, z: 0 });
+            assert.equal(trajectory.flightId, 1);
+            trajectory.update(0.3);
+            assert.ok(trajectory.elapsed > 0);
+
+            trajectory.launch({ x: 1, y: 2, z: 3 });
+            assert.equal(trajectory.flightId, 2);
+            assert.equal(trajectory.elapsed, 0.0);
+            assert.equal(trajectory.state.position.x, 1);
+            assert.equal(trajectory.state.position.y, 2);
+            assert.equal(trajectory.state.position.z, 3);
+        });
+
+        it('d. reset() does not change flightId', () => {
+            const trajectory = new BallTrajectory();
+            trajectory.launch({ x: 0, y: 0, z: 0 });
+            assert.equal(trajectory.flightId, 1);
+            trajectory.reset();
+            assert.equal(trajectory.flightId, 1);
+            assert.equal(trajectory.mode, BallTrajectoryMode.SEATED);
+            assert.equal(trajectory.elapsed, 0.0);
+        });
+
+        it('e. resetFlightCounter() sets it back to 0', () => {
+            const trajectory = new BallTrajectory();
+            trajectory.launch({ x: 0, y: 0, z: 0 });
+            trajectory.launch({ x: 0, y: 0, z: 0 });
+            assert.equal(trajectory.flightId, 2);
+            trajectory.resetFlightCounter();
+            assert.equal(trajectory.flightId, 0);
+        });
+
+        it('f. The state object includes flightId and still includes all previous fields', () => {
+            const trajectory = new BallTrajectory();
+            trajectory.launch({ x: 0.1, y: 0.2, z: 0.3 });
+            const s = trajectory.state;
+            assert.equal(s.flightId, 1);
+            assert.equal(s.mode, BallTrajectoryMode.AIR);
+            assert.equal(s.position.x, 0.1);
+            assert.equal(s.position.y, 0.2);
+            assert.equal(s.position.z, 0.3);
+            assert.equal(s.velocity.x, 0.0);
+            assert.ok(Math.abs(s.velocity.y - INITIAL_VELOCITY_Y) < 1e-6);
+            assert.equal(s.velocity.z, 0.0);
+        });
+    });
 });
