@@ -55,6 +55,19 @@ export const DEFAULT_KEN_POSITION = Object.freeze({
 });
 
 /**
+ * Target wrist roll angles around Z (in radians) to make each cup face world UP (0, 1, 0).
+ */
+export const CUP_TARGET_ROLL_ANGLES = Object.freeze({
+    big: Math.PI / 2,
+    bigCup: Math.PI / 2,
+    small: -Math.PI / 2,
+    smallCup: -Math.PI / 2,
+    base: Math.PI,
+    baseCup: Math.PI,
+    spike: 0.0,
+});
+
+/**
  * Clamps a numerical value between min and max.
  *
  * @param {number} value
@@ -90,12 +103,20 @@ export class FakeInput {
             lerpSpeed = 15.0,
             rollSpeed = 2.5,
             mouseSensitivity = 0.001,
+            autoRoll = true,
+            autoRollSpeed = 16.0,
         } = options;
 
         this._reachBounds = reachBounds;
         this._lerpSpeed = Number.isFinite(lerpSpeed) && lerpSpeed > 0 ? lerpSpeed : 15.0;
         this._rollSpeed = Number.isFinite(rollSpeed) && rollSpeed > 0 ? rollSpeed : 2.5;
         this._mouseSensitivity = Number.isFinite(mouseSensitivity) && mouseSensitivity > 0 ? mouseSensitivity : 0.001;
+
+        // Auto-roll configuration
+        this._autoRoll = autoRoll !== false;
+        this._autoRollSpeed = Number.isFinite(autoRollSpeed) && autoRollSpeed > 0 ? autoRollSpeed : 16.0;
+        this._targetCup = null;
+        this._targetRollAngle = null;
 
         // Current smoothed position
         this._currentX = clamp(initialPosition.x, this._reachBounds.xMin, this._reachBounds.xMax);
@@ -288,10 +309,47 @@ export class FakeInput {
     }
 
     /**
+     * Sets target cup for automatic Ken orientation roll.
+     * Supported keys: 'big' | 'small' | 'base' | 'spike' (unknown keys are ignored).
+     *
+     * @param {string} cupKey
+     */
+    setTargetCup(cupKey) {
+        if (this._disposed) {
+            return;
+        }
+        if (typeof cupKey === 'string' && CUP_TARGET_ROLL_ANGLES[cupKey] !== undefined) {
+            this._targetCup = cupKey;
+            this._targetRollAngle = CUP_TARGET_ROLL_ANGLES[cupKey];
+        }
+    }
+
+    /**
+     * Current target cup key.
+     * @returns {string|null}
+     */
+    get targetCup() {
+        return this._targetCup;
+    }
+
+    /**
+     * Flag indicating whether automatic wrist roll towards target cup is enabled.
+     * @returns {boolean}
+     */
+    get autoRoll() {
+        return this._autoRoll;
+    }
+
+    set autoRoll(enabled) {
+        this._autoRoll = Boolean(enabled);
+    }
+
+    /**
      * Advances simulated input by dt seconds.
      *
      * - Interpolates current position towards target position using lerp.
-     * - Applies continuous wrist roll while Q or E are held.
+     * - Applies continuous wrist roll while Q or E are held (overrides auto-roll).
+     * - Smoothly slerps wrist roll towards target cup orientation when auto-roll is active.
      * - Updates `gameplayKenGroup` in-place (zero allocations).
      *
      * @param {number} dt - Time step in seconds
@@ -316,11 +374,22 @@ export class FakeInput {
         this._currentY = clamp(this._currentY, this._reachBounds.yMin, this._reachBounds.yMax);
 
         // 2. Wrist rotation updates
-        if (this._qHeld) {
-            this._rollAngle -= this._rollSpeed * dt;
-        }
-        if (this._eHeld) {
-            this._rollAngle += this._rollSpeed * dt;
+        // Manual roll keys (Q/E) take precedence and temporarily override auto-roll while pressed
+        if (this._qHeld || this._eHeld) {
+            if (this._qHeld) {
+                this._rollAngle -= this._rollSpeed * dt;
+            }
+            if (this._eHeld) {
+                this._rollAngle += this._rollSpeed * dt;
+            }
+        } else if (this._autoRoll && this._targetRollAngle !== null) {
+            // Slerp / smooth roll toward target cup angle, settling in ~0.25s
+            const diff = this._targetRollAngle - this._rollAngle;
+            const factor = Math.min(1.0, Math.max(0.0, 1.0 - Math.exp(-this._autoRollSpeed * dt)));
+            this._rollAngle += diff * factor;
+            if (Math.abs(this._targetRollAngle - this._rollAngle) < 1e-4) {
+                this._rollAngle = this._targetRollAngle;
+            }
         }
 
         // 3. Update gameplayKenGroup in-place without allocations
