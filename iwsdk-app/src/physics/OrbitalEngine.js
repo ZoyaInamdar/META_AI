@@ -101,11 +101,13 @@ export class OrbitalEngine {
       bodies: []
     });
 
-    // Tracking
+    // Tracking & Adaptive Substepping
     this.bodyCount = 0;
     this.simulationTime = 0.0;
     this.substeps = 1;
     this.totalSteps = 0;
+    this.adaptiveSubstepping = options.adaptiveSubstepping !== false;
+    this._minSeparation = Infinity;
   }
 
   // ==========================================================================
@@ -129,6 +131,7 @@ export class OrbitalEngine {
     this.simulationTime = 0.0;
     this.substeps = 1;
     this.totalSteps = 0;
+    this._minSeparation = Infinity;
   }
 
   /**
@@ -351,11 +354,120 @@ export class OrbitalEngine {
   }
 
   /**
+   * Computes minimum Euclidean distance between all pairs of active bodies.
+   * Completely zero-allocation: evaluates directly over flat typed arrays.
+   *
+   * @returns {number} Minimum pairwise distance, or Infinity if < 2 active bodies
+   */
+  computeMinSeparation() {
+    let activeCount = 0;
+    const N = this.bodyCount;
+    let minDistSq = Infinity;
+
+    for (let i = 0; i < N; i++) {
+      if (!this.active[i]) continue;
+      activeCount++;
+      const i3 = i * 3;
+      const xi = this.positions[i3];
+      const yi = this.positions[i3 + 1];
+      const zi = this.positions[i3 + 2];
+
+      for (let j = i + 1; j < N; j++) {
+        if (!this.active[j]) continue;
+        const j3 = j * 3;
+        const dx = this.positions[j3] - xi;
+        const dy = this.positions[j3 + 1] - yi;
+        const dz = this.positions[j3 + 2] - zi;
+        const distSq = dx * dx + dy * dy + dz * dz;
+        if (distSq < minDistSq) {
+          minDistSq = distSq;
+        }
+      }
+    }
+
+    if (activeCount < 2 || !Number.isFinite(minDistSq)) {
+      this._minSeparation = Infinity;
+      return Infinity;
+    }
+
+    this._minSeparation = Math.sqrt(minDistSq);
+    return this._minSeparation;
+  }
+
+  /**
+   * Determines number of RK4 substeps (1, 4, or 12) based on minimum pairwise separation:
+   * - r_min > 1.0: 1 substep
+   * - 0.25 < r_min <= 1.0: 4 substeps
+   * - r_min <= 0.25: 12 substeps
+   *
+   * @param {number} [dt] - Outer step dt
+   * @returns {number} Substep count: 1, 4, or 12
+   */
+  determineSubsteps(dt = 0) {
+    const rMin = this.computeMinSeparation();
+    if (rMin > 1.0) {
+      return 1;
+    }
+    if (rMin > 0.25) {
+      return 4;
+    }
+    return 12;
+  }
+
+  /**
+   * Advances the simulation by timestep dt using adaptive RK4 substepping.
+   * Adjusts substep count (1, 4, or 12) dynamically based on minimum body separation.
+   * Completely allocation-free.
+   *
+   * @param {number} dt - Outer frame delta time in seconds
+   */
+  stepAdaptive(dt) {
+    if (!Number.isFinite(dt) || dt <= 0.0) return;
+    const substeps = this.determineSubsteps(dt);
+    this.substeps = substeps;
+    const subDt = dt / substeps;
+    for (let s = 0; s < substeps; s++) {
+      this.stepRK4(subDt);
+    }
+  }
+
+  /**
    * Main integration tick alias used by main.js pipeline.
-   * @param {number} dt
+   * Uses adaptive substepping when enabled (default); otherwise runs single RK4 step.
+   *
+   * @param {number} dt - Delta time in seconds
    */
   step(dt) {
-    this.stepRK4(dt);
+    if (this.adaptiveSubstepping) {
+      this.stepAdaptive(dt);
+    } else {
+      this.substeps = 1;
+      this.stepRK4(dt);
+    }
+  }
+
+  /**
+   * Returns the number of substeps evaluated in the last step.
+   * @returns {number}
+   */
+  getLastSubstepCount() {
+    return this.substeps;
+  }
+
+  /**
+   * Returns the minimum pairwise distance between active bodies computed during integration.
+   * @returns {number}
+   */
+  getMinSeparation() {
+    return this._minSeparation;
+  }
+
+  /**
+   * Enables or disables adaptive substepping.
+   * @param {boolean} enabled
+   */
+  setAdaptiveSubstepping(enabled) {
+    this.adaptiveSubstepping = Boolean(enabled);
   }
 
   /**
