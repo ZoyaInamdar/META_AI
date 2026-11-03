@@ -113,6 +113,27 @@ export const BINARY_CONFIG = Object.freeze({
   STAR_2_COLOR: '#C5A3FF'  // Soft Lavender / Periwinkle
 });
 
+/**
+ * Chapter 3 Deterministic Gravitational Slingshot Preset (Confirmed for Person C).
+ * Discovered via parameter grid sweep in scripts/sim.js.
+ */
+export const SLINGSHOT_PRESET = Object.freeze({
+  INITIAL_PLANET_POS: Object.freeze({ x: -4.0, y: 0.4, z: 0.0 }),
+  INITIAL_PLANET_VEL: Object.freeze({ x: 0.8, y: 0.0, z: 0.0 }),
+  STAR3_POS: Object.freeze({ x: -3.0, y: 0.4, z: 0.0 }),
+  STAR3_VEL: Object.freeze({ x: 0.8, y: -0.95, z: 0.0 }),
+  TIMINGS: Object.freeze({
+    PERIAPSIS_TIME: 2.7333,
+    SETTLED_TIME: 8.195,
+    TOTAL_DURATION: 20.0
+  }),
+  METRICS: Object.freeze({
+    ECCENTRICITY: 0.0975,
+    ENERGY: -0.54875,
+    PERIAPSIS_DISTANCE: 0.82232
+  })
+});
+
 // ============================================================================
 // 4. PHYSICS TIMESTEP & INTEGRATION
 // ============================================================================
