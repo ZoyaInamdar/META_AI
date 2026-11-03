@@ -167,7 +167,7 @@ const REAL_CUPS = {
         name: 'Big Cup (Oozara)',
         localPos: { x: 0.0405, y: 0.0, z: 0.0 },
         localNormal: { x: 1.0, y: 0.0, z: 0.0 },
-        rimRadius: 0.022,
+        rimRadius: 0.030,
         depth: 0.012,
         minDot: Math.cos(40.0 * (Math.PI / 180)),
         cleanRadius: 0.045,
@@ -180,7 +180,7 @@ const REAL_CUPS = {
         name: 'Small Cup (Kozara)',
         localPos: { x: -0.0405, y: 0.0, z: 0.0 },
         localNormal: { x: -1.0, y: 0.0, z: 0.0 },
-        rimRadius: 0.017,
+        rimRadius: 0.040 / KEN_SCALE,
         depth: 0.010,
         minDot: Math.cos(40.0 * (Math.PI / 180)),
         cleanRadius: 0.040,
@@ -193,7 +193,7 @@ const REAL_CUPS = {
         name: 'Base Cup (Chuzara)',
         localPos: { x: 0.0, y: -0.120, z: 0.0 },
         localNormal: { x: 0.0, y: -1.0, z: 0.0 },
-        rimRadius: 0.0175,
+        rimRadius: 0.028,
         depth: 0.008,
         minDot: Math.cos(40.0 * (Math.PI / 180)),
         cleanRadius: 0.038,
@@ -378,10 +378,10 @@ if (import.meta.vitest) {
                 expect(cup.localNormal.length()).toBeCloseTo(1.0, 5);
             }
 
-            // 2. seatOffset for big, small, base (expect about 0.0204, 0.0247, 0.0244 * KEN_SCALE)
-            expect(cupConfigs.big.seatOffset / KEN_SCALE).toBeCloseTo(0.020396, 3);
-            expect(cupConfigs.small.seatOffset / KEN_SCALE).toBeCloseTo(0.024718, 3);
-            expect(cupConfigs.base.seatOffset / KEN_SCALE).toBeCloseTo(0.024367, 3);
+            // 2. seatOffset for big, small, base (expect 0.0, about 0.0137437, 0.0107703 * KEN_SCALE)
+            expect(cupConfigs.big.seatOffset / KEN_SCALE).toBeCloseTo(0.0, 3);
+            expect(cupConfigs.small.seatOffset / KEN_SCALE).toBeCloseTo(0.0137437, 3);
+            expect(cupConfigs.base.seatOffset / KEN_SCALE).toBeCloseTo(0.0107703, 3);
             expect(cupConfigs.spike.seatOffset).toBe(0.0);
 
             // 3. Cosine between normal and world up
