@@ -177,9 +177,9 @@ describe('KendamaInputAndDetector Module', () => {
         const detector = new KendamaInputAndDetector(mockKen);
         const bigCupWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
 
-        // Big cup clean radius is 0.035m, assisted is 0.075m
-        assert.equal(CATCH_RADII.bigCup.clean, 0.035);
-        assert.equal(CATCH_RADII.bigCup.assisted, 0.075);
+        // Big cup clean and assisted catch radii must match authoritative cupConfigs
+        assert.equal(CATCH_RADII.bigCup.clean, getCupConfig(CUP_IDS.BIG_CUP).cleanCatchRadius);
+        assert.equal(CATCH_RADII.bigCup.assisted, getCupConfig(CUP_IDS.BIG_CUP).assistedCatchRadius);
 
         // Case A: Clean catch at distance 0.020m
         const cleanBallPos = {
@@ -199,11 +199,11 @@ describe('KendamaInputAndDetector Module', () => {
 
         detector.reset();
 
-        // Case B: Assisted catch at distance 0.050m (between 0.035 and 0.075)
+        // Case B: Assisted catch at distance 0.080m
         const assistedBallPos = {
-            x: bigCupWorld.position.x + bigCupWorld.normal.x * 0.050,
-            y: bigCupWorld.position.y + bigCupWorld.normal.y * 0.050,
-            z: bigCupWorld.position.z + bigCupWorld.normal.z * 0.050,
+            x: bigCupWorld.position.x + bigCupWorld.normal.x * 0.080,
+            y: bigCupWorld.position.y + bigCupWorld.normal.y * 0.080,
+            z: bigCupWorld.position.z + bigCupWorld.normal.z * 0.080,
         };
         const assistedRes = detector.evaluateCatch(assistedBallPos, ballVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
         assert.equal(assistedRes.valid, true);
@@ -211,11 +211,11 @@ describe('KendamaInputAndDetector Module', () => {
 
         detector.reset();
 
-        // Case C: Out of range at distance 0.100m (> 0.075)
+        // Case C: Out of range at distance 0.150m
         const farBallPos = {
-            x: bigCupWorld.position.x + bigCupWorld.normal.x * 0.100,
-            y: bigCupWorld.position.y + bigCupWorld.normal.y * 0.100,
-            z: bigCupWorld.position.z + bigCupWorld.normal.z * 0.100,
+            x: bigCupWorld.position.x + bigCupWorld.normal.x * 0.150,
+            y: bigCupWorld.position.y + bigCupWorld.normal.y * 0.150,
+            z: bigCupWorld.position.z + bigCupWorld.normal.z * 0.150,
         };
         const farRes = detector.evaluateCatch(farBallPos, ballVel, CUP_IDS.BIG_CUP, 1.0, 0.016);
         assert.equal(farRes.valid, false);
@@ -1084,10 +1084,12 @@ describe('Authoritative Geometry Catch Detection (Ken at origin)', () => {
         const detector = new KendamaInputAndDetector(mockKen);
         const bigWorld = detector.getWorldCupTransform(CUP_IDS.BIG_CUP);
 
-        // Clean radius is 0.035m, assist radius is 0.075m. Distance 0.050m is inside assist, outside clean.
+        // Distance strictly between authoritative clean and assisted catch radii
+        const bigConfig = getCupConfig(CUP_IDS.BIG_CUP);
+        const assistedDistance = (bigConfig.cleanCatchRadius + bigConfig.assistedCatchRadius) / 2.0;
         const ballPos = {
             x: bigWorld.position.x,
-            y: bigWorld.position.y + 0.050,
+            y: bigWorld.position.y + assistedDistance,
             z: bigWorld.position.z,
         };
         const ballVel = { x: 0.0, y: -0.5, z: 0.0 };
