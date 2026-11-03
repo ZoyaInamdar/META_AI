@@ -18,19 +18,24 @@
  */
 
 import { MissionState, PlanetState, Events } from '../contracts/Interfaces.js';
-import { MISSION_THRESHOLDS } from './missionConfig.js';
+import { MISSION_THRESHOLDS, CADENCE_CONFIG } from './missionConfig.js';
 import { TrickSequencer } from './TrickSequencer.js';
+import { applyProgradeImpulse } from '../physics/BinarySystem.js';
 
 export class MissionController {
   /**
    * @param {Object} [eventBus=null] - Optional EventBus instance for publishing Events.MISSION
    * @param {Object} [options={}]
    * @param {TrickSequencer} [options.trickSequencer=null] - Optional TrickSequencer instance
+   * @param {Object} [options.orbitalEngine=null] - Optional OrbitalEngine instance for physics interventions
+   * @param {Object} [options.binarySystem=null] - Optional BinarySystem instance
    * @param {number} [options.smoothingLambda=5.0] - Exponential smoothing response coefficient
    */
   constructor(eventBus = null, options = {}) {
     this.eventBus = eventBus;
     this.trickSequencer = options.trickSequencer || new TrickSequencer(eventBus);
+    this.orbitalEngine = options.orbitalEngine || null;
+    this.binarySystem = options.binarySystem || null;
     this.smoothingLambda = Number.isFinite(options.smoothingLambda) ? options.smoothingLambda : 5.0;
 
     // Mission State variables
@@ -110,6 +115,13 @@ export class MissionController {
           cosmicEnergy: this.cosmicEnergy,
           targetEnergy: this.getChapterTargetEnergy(this.chapter)
         });
+
+        // Notify Person A of rhythm cadence when transitioning to Chapter 2
+        if (this.chapter === 2) {
+          this.eventBus.emit(Events.CADENCE, {
+            targetCadenceSeconds: CADENCE_CONFIG.TARGET_INTERVAL
+          });
+        }
       }
     }
 
@@ -190,6 +202,68 @@ export class MissionController {
     if (awardedEnergy > 0) {
       this.cosmicEnergy += awardedEnergy;
       this._updateChapterProgress();
+
+      // In Chapter 2, check for on-cadence catch to apply prograde impulse
+      const isOnCadence = Boolean(
+        typeof scoreEvent === 'object' && scoreEvent !== null && (
+          scoreEvent.isOnCadence ||
+          scoreEvent.cadenceMultiplier > 1.0 ||
+          scoreEvent.multipliers?.cadence > 1.0
+        )
+      );
+
+      if (isOnCadence && this.chapter === 2) {
+        if (this.binarySystem) {
+          this.binarySystem.applyProgradeImpulse();
+        } else if (this.orbitalEngine) {
+          applyProgradeImpulse(this.orbitalEngine, 2, 0.05);
+        }
+      }
+    }
+
+    return this.getMissionState();
+  }
+
+  /**
+   * Connects a BinarySystem instance to the mission controller.
+   * @param {Object} binarySystem
+   */
+  setBinarySystem(binarySystem) {
+    this.binarySystem = binarySystem;
+  }
+
+  /**
+   * Connects an OrbitalEngine instance to the mission controller.
+   * @param {Object} orbitalEngine
+   */
+  setOrbitalEngine(orbitalEngine) {
+    this.orbitalEngine = orbitalEngine;
+  }
+
+  /**
+   * Directly sets the active mission chapter (1 to 4).
+   *
+   * @param {number} chapterIndex
+   * @returns {MissionState} Updated MissionState
+   */
+  setChapter(chapterIndex) {
+    const ch = Math.max(1, Math.min(4, Math.floor(chapterIndex)));
+    this.chapter = ch;
+    this.trickSequencer.setChapter(ch);
+
+    if (this.eventBus && typeof this.eventBus.emit === 'function') {
+      this.eventBus.emit(Events.MISSION, {
+        chapter: this.chapter,
+        milestoneReached: true,
+        cosmicEnergy: this.cosmicEnergy,
+        targetEnergy: this.getChapterTargetEnergy(this.chapter)
+      });
+
+      if (this.chapter === 2) {
+        this.eventBus.emit(Events.CADENCE, {
+          targetCadenceSeconds: CADENCE_CONFIG.TARGET_INTERVAL
+        });
+      }
     }
 
     return this.getMissionState();

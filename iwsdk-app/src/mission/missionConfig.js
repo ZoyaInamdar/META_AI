@@ -94,6 +94,25 @@ export const WORLD_CONFIG = Object.freeze({
   SKY_VIEW_OFFSET: COSMIC_SCALE.SKY_ORIGIN
 });
 
+/**
+ * Chapter 2 Binary Star System and Visual Skybox Configuration (Confirmed for Person C).
+ */
+export const BINARY_CONFIG = Object.freeze({
+  SEPARATION: 0.8,
+  STAR_MASS_1: 1.0,
+  STAR_MASS_2: 1.0,
+  PLANET_ORBIT_RADIUS: 2.4,
+  TARGET_RESONANT_RADIUS: 3.2,
+  BOOST_DELTA_V: 0.05,
+  SKY_ORIGIN: COSMIC_SCALE.SKY_ORIGIN,
+  STAR_1_SKY_OFFSET: Object.freeze({ x: 4.0, y: 0.0, z: 0.0 }),  // +0.4 * 10.0
+  STAR_2_SKY_OFFSET: Object.freeze({ x: -4.0, y: 0.0, z: 0.0 }), // -0.4 * 10.0
+  STAR_1_RADIUS: 0.45,
+  STAR_2_RADIUS: 0.35,
+  STAR_1_COLOR: '#FFAAA6', // Pastel Pink / Peach
+  STAR_2_COLOR: '#C5A3FF'  // Soft Lavender / Periwinkle
+});
+
 // ============================================================================
 // 4. PHYSICS TIMESTEP & INTEGRATION
 // ============================================================================
