@@ -32,7 +32,9 @@ export const Events = Object.freeze({
   TARGET: 'target',   // Emitted by Person B to notify Person A & C of active target
   MISSION: 'mission', // Emitted by Person B on mission/chapter progression
   PHYSICS: 'physics', // Emitted by Person B on N-body orbital step
-  PLANET: 'planet'    // Emitted by Person B on planetary evolution state change
+  PLANET: 'planet',   // Emitted by Person B on planetary evolution state change
+  BURN_START: 'burn_start', // Emitted by Person B on capture burn initiation
+  BURN_END: 'burn_end'      // Emitted by Person B on capture burn completion
 });
 
 /**
@@ -292,5 +294,19 @@ export class PhysicsState {
     this.substeps = options.substeps ?? options.substepCount ?? 1;
     this.substepCount = this.substeps;
     this.bodies = options.bodies ?? [];
+  }
+}
+
+/**
+ * BurnState: Tracks active retrograde capture burn progress and thrust vector.
+ * Owned & Emitted by Person B (`CaptureBurn`). Consumed by Person C for VFX/SFX.
+ */
+export class BurnState {
+  constructor(options = {}) {
+    this.isActive = options.isActive ?? false;      // true while burn is firing
+    this.elapsed = options.elapsed ?? 0.0;        // seconds into burn [0.0, 1.0]
+    this.duration = options.duration ?? 1.0;       // fixed 1.0s
+    this.progress = options.progress ?? 0.0;       // normalized [0.0, 1.0]
+    this.thrustVector = options.thrustVector ?? { x: 0.0, y: 0.0, z: 0.0 }; // normalized direction
   }
 }
