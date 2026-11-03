@@ -35,6 +35,7 @@ import { BallTrajectory } from './BallTrajectory.js';
 import { CatchFlow } from './CatchFlow.js';
 import { ScoreManager } from './ScoreManager.js';
 import { KendamaInputAndDetector } from '../input/KendamaInputAndDetector.js';
+import { PoseFilter } from '../input/PoseFilter.js';
 
 export class GameLoop {
   /**
@@ -43,6 +44,8 @@ export class GameLoop {
    * @param {any} [options.gameplayKenGroup]
    * @param {any} [options.inputSource]
    * @param {string} [options.inputSourceType]
+   * @param {PoseFilter|null} [options.poseFilter]
+   * @param {Object} [options.filterOptions={}]
    * @param {BallTrajectory} [options.trajectory]
    * @param {CatchFlow} [options.catchFlow]
    * @param {KendamaInputAndDetector} [options.detector]
@@ -57,6 +60,8 @@ export class GameLoop {
       gameplayKenGroup = null,
       inputSource = null,
       inputSourceType = null,
+      poseFilter = undefined,
+      filterOptions = {},
       trajectory = null,
       catchFlow = null,
       detector = null,
@@ -70,6 +75,11 @@ export class GameLoop {
     this.gameplayKenGroup = gameplayKenGroup;
     this.inputSource = inputSource;
     this.inputSourceType = inputSourceType;
+
+    // Pose filter for smoothing noisy hardware hand tracking (bypassed for FakeInput)
+    this.poseFilter = poseFilter !== undefined
+      ? poseFilter
+      : new PoseFilter(filterOptions);
 
     // Component instances
     this.trajectory = trajectory || new BallTrajectory();
@@ -174,17 +184,51 @@ export class GameLoop {
 
     // Synchronize resulting pose to canonical gameplayKenGroup
     if (inputOutput && inputOutput.position && inputOutput.quaternion) {
-      if (this.gameplayKenGroup) {
-        if (typeof this.gameplayKenGroup.position?.copy === 'function') {
-          this.gameplayKenGroup.position.copy(inputOutput.position);
+      const isCurrentlyValid = inputOutput.isTrackingValid !== false;
+
+      if (isHandAdapter) {
+        if (!isCurrentlyValid) {
+          // Tracking is lost: reset filter, do not feed invalid tracking samples,
+          // and preserve the existing canonical gameplayKenGroup transform in-place.
+          if (this.poseFilter) {
+            this.poseFilter.reset();
+          }
+        } else {
+          // Tracking is valid: if recovering from lost tracking, start with a fresh filter state
+          if (!this._isTrackingValid && this.poseFilter) {
+            this.poseFilter.reset();
+          }
+
+          // Apply filter only to valid hand position data
+          const filteredPos = this.poseFilter
+            ? this.poseFilter.filter(inputOutput.position, dt)
+            : inputOutput.position;
+
+          if (this.gameplayKenGroup) {
+            if (typeof this.gameplayKenGroup.position?.copy === 'function') {
+              this.gameplayKenGroup.position.copy(filteredPos);
+            }
+            // Quaternion remains completely unfiltered; copy directly
+            if (typeof this.gameplayKenGroup.quaternion?.copy === 'function') {
+              this.gameplayKenGroup.quaternion.copy(inputOutput.quaternion);
+            }
+          }
         }
-        if (typeof this.gameplayKenGroup.quaternion?.copy === 'function') {
-          this.gameplayKenGroup.quaternion.copy(inputOutput.quaternion);
+      } else {
+        // Non-hand input: bypass PoseFilter
+        if (this.gameplayKenGroup) {
+          if (typeof this.gameplayKenGroup.position?.copy === 'function') {
+            this.gameplayKenGroup.position.copy(inputOutput.position);
+          }
+          if (typeof this.gameplayKenGroup.quaternion?.copy === 'function') {
+            this.gameplayKenGroup.quaternion.copy(inputOutput.quaternion);
+          }
         }
       }
-      this._isTrackingValid = inputOutput.isTrackingValid !== false;
+
+      this._isTrackingValid = isCurrentlyValid;
     } else if (this.inputSource.gameplayKenGroup) {
-      // FakeInput creates an internal gameplayKenGroup
+      // FakeInput creates an internal gameplayKenGroup; bypass PoseFilter
       if (this.gameplayKenGroup && this.gameplayKenGroup !== this.inputSource.gameplayKenGroup) {
         if (typeof this.gameplayKenGroup.position?.copy === 'function') {
           this.gameplayKenGroup.position.copy(this.inputSource.gameplayKenGroup.position);

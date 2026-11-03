@@ -27,6 +27,7 @@ import { ScoreManager } from './ScoreManager.js';
 import { KendamaInputAndDetector } from '../input/KendamaInputAndDetector.js';
 import { FakeInput } from '../input/FakeInput.js';
 import { HandPoseAdapter } from '../input/HandPoseAdapter.js';
+import { PoseFilter } from '../input/PoseFilter.js';
 import { GamePipeline, createGameplayKenGroup, DefaultMissionController } from '../main.js';
 
 function createMockKenGroup() {
@@ -777,6 +778,256 @@ describe('GameLoop (Person A)', () => {
       loopWithHand.inputSystem.update(0.016, validJoints);
       expect(adapter.isTrackingValid).toBe(true);
       expect(kenGroup.position.x).toBeCloseTo(0.05);
+    });
+
+    it('32a. Valid hand positions are filtered across multiple frames', () => {
+      const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+      const customFilter = new PoseFilter({ minCutoff: 1.0, beta: 0.1 });
+      const loopWithHand = new GameLoop({
+        eventBus,
+        gameplayKenGroup: kenGroup,
+        inputSource: adapter,
+        poseFilter: customFilter,
+        trajectory,
+        catchFlow,
+        detector,
+        scoreManager,
+      });
+
+      // Frame 1: Initial position at x = 0.0
+      loopWithHand.inputSystem.update(0.016, {
+        wrist: {
+          position: { x: 0.0, y: 1.25, z: -0.45 },
+          quaternion: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+          valid: true,
+        },
+      });
+      expect(kenGroup.position.x).toBeCloseTo(0.0);
+
+      // Frame 2: Sudden jump in raw tracking to x = 0.10
+      loopWithHand.inputSystem.update(0.016, {
+        wrist: {
+          position: { x: 0.10, y: 1.25, z: -0.45 },
+          quaternion: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+          valid: true,
+        },
+      });
+      // The filter smooths the jump: position must be strictly between 0.0 and 0.10
+      expect(kenGroup.position.x).toBeGreaterThan(0.0);
+      expect(kenGroup.position.x).toBeLessThan(0.10);
+
+      // Frame 3: Consecutive sample at x = 0.10 moves closer to target
+      const prevX = kenGroup.position.x;
+      loopWithHand.inputSystem.update(0.016, {
+        wrist: {
+          position: { x: 0.10, y: 1.25, z: -0.45 },
+          quaternion: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+          valid: true,
+        },
+      });
+      expect(kenGroup.position.x).toBeGreaterThan(prevX);
+      expect(kenGroup.position.x).toBeLessThanOrEqual(0.10);
+    });
+
+    it('32b. Invalid tracking resets PoseFilter and preserves canonical transform without reverting to raw adapter pose', () => {
+      const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+      const customFilter = new PoseFilter({ minCutoff: 1.0, beta: 0.1 });
+      const loopWithHand = new GameLoop({
+        eventBus,
+        gameplayKenGroup: kenGroup,
+        inputSource: adapter,
+        poseFilter: customFilter,
+        trajectory,
+        catchFlow,
+        detector,
+        scoreManager,
+      });
+
+      // Frame 1: Initial position at x = 0.0
+      loopWithHand.inputSystem.update(0.016, {
+        wrist: {
+          position: { x: 0.0, y: 1.25, z: -0.45 },
+          quaternion: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+          valid: true,
+        },
+      });
+      expect(loopWithHand.poseFilter.isInitialized()).toBe(true);
+
+      // Frame 2: Raw hand jumps to 0.10. PoseFilter smooths position strictly between 0.0 and 0.10.
+      loopWithHand.inputSystem.update(0.016, {
+        wrist: {
+          position: { x: 0.10, y: 1.25, z: -0.45 },
+          quaternion: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+          valid: true,
+        },
+      });
+      const filteredX = kenGroup.position.x;
+      expect(filteredX).toBeGreaterThan(0.0);
+      expect(filteredX).toBeLessThan(0.10);
+      // Adapter's raw retained position is 0.10
+      expect(adapter._lastValidPosition.x).toBeCloseTo(0.10);
+
+      // Frame 3: Tracking lost (null joints) -> filter is reset, but canonical transform remains unchanged
+      loopWithHand.inputSystem.update(0.016, null);
+      expect(loopWithHand.poseFilter.isInitialized()).toBe(false);
+      expect(loopWithHand._isTrackingValid).toBe(false);
+
+      // Canonical transform preserves the filtered position in-place rather than reverting to raw adapter 0.10
+      expect(kenGroup.position.x).toBe(filteredX);
+      expect(kenGroup.position.x).not.toBeCloseTo(adapter._lastValidPosition.x);
+    });
+
+    it('32c. Recovery starts with a fresh filter state without lag from pre-loss position', () => {
+      const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+      const loopWithHand = new GameLoop({
+        eventBus,
+        gameplayKenGroup: kenGroup,
+        inputSource: adapter,
+        trajectory,
+        catchFlow,
+        detector,
+        scoreManager,
+      });
+
+      // Frame 1: Valid initial sample at origin x = 0.0
+      loopWithHand.inputSystem.update(0.016, {
+        wrist: {
+          position: { x: 0.0, y: 1.25, z: -0.45 },
+          quaternion: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+          valid: true,
+        },
+      });
+      expect(kenGroup.position.x).toBeCloseTo(0.0);
+
+      // Frame 2: Tracking lost
+      loopWithHand.inputSystem.update(0.016, null);
+      expect(loopWithHand._isTrackingValid).toBe(false);
+      expect(loopWithHand.poseFilter.isInitialized()).toBe(false);
+
+      // Frame 3: Tracking recovers at a completely distant position x = 0.25
+      loopWithHand.inputSystem.update(0.016, {
+        wrist: {
+          position: { x: 0.25, y: 1.30, z: -0.40 },
+          quaternion: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+          valid: true,
+        },
+      });
+      expect(loopWithHand._isTrackingValid).toBe(true);
+      // Because recovery starts with a fresh filter state, the first recovered sample snaps directly to x = 0.25
+      expect(kenGroup.position.x).toBeCloseTo(0.25);
+      expect(kenGroup.position.y).toBeCloseTo(1.30);
+      expect(kenGroup.position.z).toBeCloseTo(-0.40);
+    });
+
+    it('32d. Quaternion orientation remains completely unchanged by position filtering', () => {
+      const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+      const loopWithHand = new GameLoop({
+        eventBus,
+        gameplayKenGroup: kenGroup,
+        inputSource: adapter,
+        trajectory,
+        catchFlow,
+        detector,
+        scoreManager,
+      });
+
+      // Normalized arbitrary quaternion
+      const testQuat = { x: 0.1414, y: 0.2828, z: 0.4242, w: 0.8485 };
+
+      // Frame 1
+      loopWithHand.inputSystem.update(0.016, {
+        wrist: {
+          position: { x: 0.0, y: 1.25, z: -0.45 },
+          quaternion: testQuat,
+          valid: true,
+        },
+      });
+      expect(kenGroup.quaternion.x).toBeCloseTo(testQuat.x, 3);
+      expect(kenGroup.quaternion.y).toBeCloseTo(testQuat.y, 3);
+      expect(kenGroup.quaternion.z).toBeCloseTo(testQuat.z, 3);
+      expect(kenGroup.quaternion.w).toBeCloseTo(testQuat.w, 3);
+
+      // Frame 2: Position moves, quaternion is rotated to a different orientation
+      const testQuat2 = { x: 0.0, y: Math.SQRT1_2, z: 0.0, w: Math.SQRT1_2 };
+      loopWithHand.inputSystem.update(0.016, {
+        wrist: {
+          position: { x: 0.15, y: 1.35, z: -0.40 },
+          quaternion: testQuat2,
+          valid: true,
+        },
+      });
+      // Position is filtered/smoothed:
+      expect(kenGroup.position.x).toBeLessThan(0.15);
+      // But quaternion must strictly match testQuat2 without smoothing:
+      expect(kenGroup.quaternion.x).toBeCloseTo(testQuat2.x, 5);
+      expect(kenGroup.quaternion.y).toBeCloseTo(testQuat2.y, 5);
+      expect(kenGroup.quaternion.z).toBeCloseTo(testQuat2.z, 5);
+      expect(kenGroup.quaternion.w).toBeCloseTo(testQuat2.w, 5);
+    });
+
+    it('32e. FakeInput bypasses PoseFilter completely', () => {
+      const fakeInput = new FakeInput();
+      let filterCalled = false;
+      const mockFilter = {
+        filter(pos) {
+          filterCalled = true;
+          return pos;
+        },
+        reset() {},
+        isInitialized() { return true; },
+      };
+
+      const loopWithFake = new GameLoop({
+        eventBus,
+        gameplayKenGroup: kenGroup,
+        inputSource: fakeInput,
+        poseFilter: mockFilter,
+        trajectory,
+        catchFlow,
+        detector,
+        scoreManager,
+      });
+
+      fakeInput.handleMouseMove({ movementX: 80, movementY: -40 });
+      loopWithFake.inputSystem.update(0.016, null);
+
+      expect(filterCalled).toBe(false);
+      expect(kenGroup.position.x).not.toBe(0.0);
+    });
+
+    it('32f. Explicit poseFilter: null disables filtering for HandPoseAdapter', () => {
+      const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+      const loopNoFilter = new GameLoop({
+        eventBus,
+        gameplayKenGroup: kenGroup,
+        inputSource: adapter,
+        poseFilter: null,
+        trajectory,
+        catchFlow,
+        detector,
+        scoreManager,
+      });
+
+      // Frame 1
+      loopNoFilter.inputSystem.update(0.016, {
+        wrist: {
+          position: { x: 0.0, y: 1.25, z: -0.45 },
+          quaternion: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+          valid: true,
+        },
+      });
+
+      // Frame 2: Immediate jump in raw tracking
+      loopNoFilter.inputSystem.update(0.016, {
+        wrist: {
+          position: { x: 0.10, y: 1.25, z: -0.45 },
+          quaternion: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+          valid: true,
+        },
+      });
+
+      // Without filter, position snaps instantly to 0.10
+      expect(kenGroup.position.x).toBeCloseTo(0.10);
     });
   });
 
