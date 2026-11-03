@@ -133,14 +133,12 @@ export class CaptureBurn {
     }
 
     this.elapsed += effectiveDt;
-    const progress = Math.min(1.0, this.elapsed / this.duration);
-    this.burnState.elapsed = this.elapsed;
-    this.burnState.progress = progress;
-
-    if (this.elapsed >= this.duration) {
+    if (this.elapsed >= this.duration - 1e-12) {
+      this.elapsed = this.duration;
       this.isActive = false;
       this.burnState.isActive = false;
       this.burnState.progress = 1.0;
+      this.burnState.elapsed = this.duration;
 
       if (this.eventBus && typeof this.eventBus.emit === 'function') {
         this.eventBus.emit(Events.BURN_END || 'burn_end', {
@@ -149,6 +147,10 @@ export class CaptureBurn {
           targetBody: this.planetIndex
         });
       }
+    } else {
+      const progress = Math.min(1.0, this.elapsed / this.duration);
+      this.burnState.elapsed = this.elapsed;
+      this.burnState.progress = progress;
     }
 
     return this.getBurnState();

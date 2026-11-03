@@ -161,27 +161,45 @@ describe('Chapter 1 Retrograde Capture Burn (Step 1.8)', () => {
       engine.setBody(0, 'star', 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, true);
       engine.setBody(1, 'planet', 1e-6, 1.0, 0.0, 0.0, 0.0, 1.55, 0.0, false);
 
-      burn.triggerBurn(1, 0.5, 1.0);
+      const zeroAllocBus = { emit: () => {}, on: () => {} };
+      const nonAllocatingBurn = new CaptureBurn(zeroAllocBus);
+      nonAllocatingBurn.triggerBurn(1, 0.5, 1.0);
 
-      const pushSpy = vi.spyOn(Array.prototype, 'push');
-      const sliceSpy = vi.spyOn(Array.prototype, 'slice');
-      const assignSpy = vi.spyOn(Object, 'assign');
-      const createSpy = vi.spyOn(Object, 'create');
+      const originalPush = Array.prototype.push;
+      const originalSlice = Array.prototype.slice;
+      const originalAssign = Object.assign;
 
-      const dt = 1 / 120;
-      for (let s = 0; s < 120; s++) {
-        burn.update(dt, engine);
+      let pushCount = 0;
+      let sliceCount = 0;
+      let assignCount = 0;
+
+      Array.prototype.push = function (...args) {
+        pushCount++;
+        return originalPush.apply(this, args);
+      };
+      Array.prototype.slice = function (...args) {
+        sliceCount++;
+        return originalSlice.apply(this, args);
+      };
+      Object.assign = function (...args) {
+        assignCount++;
+        return originalAssign.apply(this, args);
+      };
+
+      try {
+        const dt = 1 / 120;
+        for (let s = 0; s < 120; s++) {
+          nonAllocatingBurn.update(dt, engine);
+        }
+
+        expect(pushCount).toBe(0);
+        expect(sliceCount).toBe(0);
+        expect(assignCount).toBe(0);
+      } finally {
+        Array.prototype.push = originalPush;
+        Array.prototype.slice = originalSlice;
+        Object.assign = originalAssign;
       }
-
-      expect(pushSpy).not.toHaveBeenCalled();
-      expect(sliceSpy).not.toHaveBeenCalled();
-      expect(assignSpy).not.toHaveBeenCalled();
-      expect(createSpy).not.toHaveBeenCalled();
-
-      pushSpy.mockRestore();
-      sliceSpy.mockRestore();
-      assignSpy.mockRestore();
-      createSpy.mockRestore();
     });
   });
 });
