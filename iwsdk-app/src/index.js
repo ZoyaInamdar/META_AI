@@ -33,6 +33,7 @@ World.create(document.getElementById('scene-container'), projectOptions).then((w
         envSystem.setMode(startupMode);
         if (typeof window !== 'undefined') {
             window.celestialEnvironment = envSystem;
+            window.planetoidRenderer = envSystem.planetoidRenderer;
         }
         console.log(`[CelestialEnvironmentSystem] Started in "${startupMode}" mode`);
     }

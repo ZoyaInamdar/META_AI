@@ -1,0 +1,293 @@
+<!--
+  Celestial Kendama - Collectible Product-Card Preset Selection Interface
+  Role: Person C (Visuals & Rendering)
+
+  Features:
+  - Prominent Selected-Design Showcase Preview Area with complete Kendama visual,
+    authentic title, description from KendamaPresets.js, and edition accent styling.
+  - Five collectible rectangular product cards representing the 5 complete paired designs:
+    1. Celestial Kendama ('celestial')
+    2. Galaxy Wood ('galaxy-wood')
+    3. Bubblegum Pop ('bubblegum-pop')
+    4. Dark Matter ('dark-matter')
+    5. Porcelain Dreams ('porcelain-dreams')
+  - Complete 3D Kendama rendered previews (Ken + seated Tama together).
+  - Selected-state indicators and design-specific palette accents.
+-->
+<style>
+  .selector-panel {
+    flex-direction: column;
+    width: 530px;
+    padding-top: 18px;
+    padding-bottom: 18px;
+    padding-left: 20px;
+    padding-right: 20px;
+    gap: 12px;
+  }
+
+  .header-wrap {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .header-eyebrow {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    color: #9299ab;
+  }
+
+  .header-title {
+    font-size: 24px;
+    font-weight: 700;
+    color: #fafaf7;
+  }
+
+  .hero-card {
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+    padding-top: 14px;
+    padding-bottom: 14px;
+    padding-left: 16px;
+    padding-right: 16px;
+    border-radius: 16px;
+    background-color: #161722;
+    border-width: 1px;
+    border-color: #2c3042;
+  }
+
+  .hero-preview-box {
+    width: 136px;
+    height: 136px;
+    border-radius: 12px;
+    background-color: #0c0d12;
+    border-width: 1px;
+    border-color: #242736;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .hero-img {
+    width: 128px;
+    height: 128px;
+    border-radius: 10px;
+  }
+
+  .hero-info {
+    flex-direction: column;
+    gap: 6px;
+    flex-grow: 1;
+    justify-content: center;
+  }
+
+  .hero-tag {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    color: #4da6ff;
+  }
+
+  .hero-name {
+    font-size: 22px;
+    font-weight: 700;
+    color: #ffffff;
+  }
+
+  .hero-swatches {
+    flex-direction: row;
+    gap: 5px;
+    align-items: center;
+    margin-top: 1px;
+    margin-bottom: 1px;
+  }
+
+  .hero-swatch-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: #555d73;
+  }
+
+  .hero-desc {
+    font-size: 12px;
+    line-height: 17px;
+    color: #b2b8c9;
+  }
+
+  .cards-section-header {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    color: #9299ab;
+    margin-top: 2px;
+  }
+
+  .cards-row {
+    flex-direction: row;
+    gap: 8px;
+    justify-content: space-between;
+  }
+
+  .product-card {
+    flex-direction: column;
+    align-items: center;
+    width: 90px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    padding-left: 6px;
+    padding-right: 6px;
+    border-radius: 12px;
+    background-color: #15161f;
+    border-width: 1px;
+    border-color: #282b3a;
+    gap: 6px;
+    cursor: pointer;
+  }
+
+  .card-preview-box {
+    width: 76px;
+    height: 76px;
+    border-radius: 8px;
+    background-color: #0b0c11;
+    border-width: 1px;
+    border-color: #222533;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .card-img {
+    width: 72px;
+    height: 72px;
+    border-radius: 6px;
+  }
+
+  .card-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #ffffff;
+    text-align: center;
+  }
+
+  .card-swatches {
+    flex-direction: row;
+    gap: 3px;
+    align-items: center;
+  }
+
+  .card-swatch-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: #4a5063;
+  }
+
+  .card-badge {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: #4da6ff;
+  }
+</style>
+<Panel class="selector-panel">
+  <!-- Showroom Header -->
+  <div class="header-wrap">
+    <div class="header-eyebrow">CELESTIAL KENDAMA SHOWROOM</div>
+    <div class="header-title">Collectible Showcase</div>
+  </div>
+
+  <!-- Selected Design Showcase Hero Area -->
+  <div id="hero-container" class="hero-card">
+    <div class="hero-preview-box">
+      <img id="hero-img" class="hero-img" src="textures/previews/porcelain-dreams.png" />
+    </div>
+    <div class="hero-info">
+      <span id="hero-tag" class="hero-tag">COLLECTIBLE EDITIONS - 05/05</span>
+      <span id="hero-title" class="hero-name">Porcelain Dreams</span>
+      <div id="hero-swatches" class="hero-swatches">
+        <div id="hero-dot-1" class="hero-swatch-dot" style="background-color: #f5f0e5;"></div>
+        <div id="hero-dot-2" class="hero-swatch-dot" style="background-color: #174a9c;"></div>
+        <div id="hero-dot-3" class="hero-swatch-dot" style="background-color: #245eb8;"></div>
+      </div>
+      <span id="hero-desc" class="hero-desc">Glazed blue-and-white porcelain-inspired Ken with original floral motifs and ornamental borders, paired with a matching glazed ivory and cobalt Tama.</span>
+    </div>
+  </div>
+
+  <div class="cards-section-header">COLLECTIBLE EDITIONS (5 DESIGNS)</div>
+
+  <!-- 5 Individual Collectible Cards in a Row -->
+  <div class="cards-row">
+    <!-- Card 1: Celestial Kendama -->
+    <Button id="preset-card-celestial" class="product-card" variant="secondary">
+      <div class="card-preview-box">
+        <img id="thumb-celestial" class="card-img" src="textures/previews/celestial.png" />
+      </div>
+      <span class="card-title">Celestial</span>
+      <div class="card-swatches">
+        <div class="card-swatch-dot" style="background-color: #efb9d5;"></div>
+        <div class="card-swatch-dot" style="background-color: #786a9e;"></div>
+        <div class="card-swatch-dot" style="background-color: #344f91;"></div>
+      </div>
+      <span id="badge-celestial" class="card-badge" style="display: none;">SELECTED</span>
+    </Button>
+
+    <!-- Card 2: Galaxy Wood -->
+    <Button id="preset-card-galaxy-wood" class="product-card" variant="secondary">
+      <div class="card-preview-box">
+        <img id="thumb-galaxy-wood" class="card-img" src="textures/previews/galaxy-wood.png" />
+      </div>
+      <span class="card-title">Galaxy Wood</span>
+      <div class="card-swatches">
+        <div class="card-swatch-dot" style="background-color: #441e15;"></div>
+        <div class="card-swatch-dot" style="background-color: #f5b82e;"></div>
+        <div class="card-swatch-dot" style="background-color: #e88724;"></div>
+      </div>
+      <span id="badge-galaxy-wood" class="card-badge" style="display: none;">SELECTED</span>
+    </Button>
+
+    <!-- Card 3: Bubblegum Pop -->
+    <Button id="preset-card-bubblegum-pop" class="product-card" variant="secondary">
+      <div class="card-preview-box">
+        <img id="thumb-bubblegum-pop" class="card-img" src="textures/previews/bubblegum-pop.png" />
+      </div>
+      <span class="card-title">Bubblegum</span>
+      <div class="card-swatches">
+        <div class="card-swatch-dot" style="background-color: #f23891;"></div>
+        <div class="card-swatch-dot" style="background-color: #7436c8;"></div>
+        <div class="card-swatch-dot" style="background-color: #ffd447;"></div>
+      </div>
+      <span id="badge-bubblegum-pop" class="card-badge" style="display: none;">SELECTED</span>
+    </Button>
+
+    <!-- Card 4: Dark Matter -->
+    <Button id="preset-card-dark-matter" class="product-card" variant="secondary">
+      <div class="card-preview-box">
+        <img id="thumb-dark-matter" class="card-img" src="textures/previews/dark-matter.png" />
+      </div>
+      <span class="card-title">Dark Matter</span>
+      <div class="card-swatches">
+        <div class="card-swatch-dot" style="background-color: #1a1a22;"></div>
+        <div class="card-swatch-dot" style="background-color: #ff1e8a;"></div>
+        <div class="card-swatch-dot" style="background-color: #5e5b6e;"></div>
+      </div>
+      <span id="badge-dark-matter" class="card-badge" style="display: none;">SELECTED</span>
+    </Button>
+
+    <!-- Card 5: Porcelain Dreams (Initial Active Selection) -->
+    <Button id="preset-card-porcelain-dreams" class="product-card" variant="primary">
+      <div class="card-preview-box">
+        <img id="thumb-porcelain-dreams" class="card-img" src="textures/previews/porcelain-dreams.png" />
+      </div>
+      <span class="card-title">Porcelain</span>
+      <div class="card-swatches">
+        <div class="card-swatch-dot" style="background-color: #f5f0e5;"></div>
+        <div class="card-swatch-dot" style="background-color: #174a9c;"></div>
+        <div class="card-swatch-dot" style="background-color: #245eb8;"></div>
+      </div>
+      <span id="badge-porcelain-dreams" class="card-badge" style="display: flex;">SELECTED</span>
+    </Button>
+  </div>
+</Panel>
