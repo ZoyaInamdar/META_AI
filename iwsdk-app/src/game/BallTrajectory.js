@@ -212,8 +212,19 @@ export class BallTrajectory {
                 z: this._velocity.z,
             },
             mode: this._mode,
+            isAirborne: this._mode === BallTrajectoryMode.AIR,
             flightId: this._flightId,
+            elapsed: this._elapsed,
+            flightDuration: FLIGHT_DURATION,
         };
+    }
+
+    /**
+     * Whether the ball is currently in flight.
+     * @returns {boolean}
+     */
+    get isAirborne() {
+        return this._mode === BallTrajectoryMode.AIR;
     }
 
     /**

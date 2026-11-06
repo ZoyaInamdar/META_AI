@@ -312,5 +312,26 @@ describe('BallTrajectory Module', () => {
             assert.ok(Math.abs(s.velocity.y - INITIAL_VELOCITY_Y) < 1e-6);
             assert.equal(s.velocity.z, 0.0);
         });
+
+        it('g. simulated launch reaches an apex height of ~0.22 m (+/-0.01)', () => {
+            const trajectory = new BallTrajectory();
+            const launchY = 1.25;
+            trajectory.launch({ x: 0, y: launchY, z: -0.45 });
+
+            let maxApexHeightAboveLaunch = 0;
+            const dt = 1 / 120;
+            for (let t = 0; t <= FLIGHT_DURATION; t += dt) {
+                trajectory.update(dt);
+                const heightAboveLaunch = trajectory.state.position.y - launchY;
+                if (heightAboveLaunch > maxApexHeightAboveLaunch) {
+                    maxApexHeightAboveLaunch = heightAboveLaunch;
+                }
+            }
+
+            assert.ok(
+                Math.abs(maxApexHeightAboveLaunch - 0.22) <= 0.01,
+                `Expected apex height ~0.22 m (+/-0.01), got ${maxApexHeightAboveLaunch}`
+            );
+        });
     });
 });

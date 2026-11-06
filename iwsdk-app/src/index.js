@@ -9,12 +9,66 @@ import projectOptions from 'virtual:iwsdk-project';
 import { PanelSystem } from './panel.js';
 import { RobotSystem } from './robot.js';
 import { CupInspectionSystem } from './render/CupInspectionSystem.js';
+import { initGame, gameplayKenGroup } from './main.js';
+import { GameLoop } from './game/GameLoop.js';
+import { HandPoseAdapter } from './input/HandPoseAdapter.js';
+import { setupDebugScene } from './game/debugScene.js';
+
+// Ensure hand tracking is requested in XR session features
+if (!projectOptions.xr) {
+    projectOptions.xr = { sessionMode: 'immersive-vr', offer: 'always', features: { handTracking: true } };
+} else {
+    if (!projectOptions.xr.features) {
+        projectOptions.xr.features = {};
+    }
+    if (!projectOptions.xr.features.handTracking) {
+        projectOptions.xr.features.handTracking = true;
+    }
+}
+
 console.log('[DIAGNOSTIC] src/index.js starting World.create with level URL:', projectOptions.level);
 World.create(document.getElementById('scene-container'), projectOptions).then((world) => {
     console.log('[DIAGNOSTIC] World.create resolved. Active level ID:', world.activeLevelId);
     world.registerSystem(RobotSystem);
     world.registerSystem(PanelSystem);
     world.registerSystem(CupInspectionSystem);
+
+    // Resolve launchHand: defaults to 'left' (off hand), overridable via ?launchHand=right|either in URL
+    let launchHand = 'left';
+    if (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') {
+        const params = new URLSearchParams(window.location.search);
+        const paramVal = params.get('launchHand');
+        if (paramVal === 'right' || paramVal === 'either' || paramVal === 'left') {
+            launchHand = paramVal;
+        }
+    }
+
+    // Person A: Instantiate real GameLoop with HandPoseAdapter and canonical gameplayKenGroup
+    const inputSource = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+    const gameLoop = new GameLoop({
+        gameplayKenGroup,
+        inputSource,
+        inputSourceType: 'hand',
+        hand: 'right',
+        gripSource: 'wrist',
+        launchHand,
+    });
+
+    // Initialize game pipeline and register KendamaXRSystem into IWSDK World
+    const game = initGame({
+        world,
+        gameLoop,
+        hand: 'right',
+        gameplayKenGroup,
+    });
+
+    // Add canonical gameplayKenGroup to world scene
+    if (world.scene && game.gameplayKenGroup) {
+        world.scene.add(game.gameplayKenGroup);
+    }
+
+    // Setup debug visuals and diagnostics (?debug URL parameter only)
+    setupDebugScene({ world, game, gameLoop });
 }).catch((error) => {
     console.error('[DIAGNOSTIC] World.create failed with error:', error);
 });
