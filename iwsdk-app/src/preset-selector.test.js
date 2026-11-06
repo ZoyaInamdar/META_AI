@@ -21,6 +21,7 @@
 
 import { describe, it } from 'vitest';
 import assert from 'node:assert/strict';
+import { Scene } from 'three';
 import {
     PresetSelectorSystem,
     PRESET_SELECTOR_IDS,
@@ -122,21 +123,33 @@ function createMockWorldWithSystems(options = {}) {
     const {
         previewRoot = createPorcelainDreamsPreviewAsset(),
         panel = createMockPresetPanel(),
+        scene = new Scene(),
     } = options;
 
     let currentPreview = previewRoot;
     let currentPanel = panel;
 
+    if (currentPreview && currentPreview.parent !== scene) {
+        scene.add(currentPreview);
+    }
+
     const systems = new Map();
 
     const world = {
+        scene,
         getSceneObject(id) {
             if (id === 'cup-preview') return currentPreview;
             if (id === 'preset-selector') return currentPanel;
             return null;
         },
         setPreviewRoot(node) {
+            if (currentPreview && currentPreview.parent === scene) {
+                scene.remove(currentPreview);
+            }
             currentPreview = node;
+            if (currentPreview && currentPreview.parent !== scene) {
+                scene.add(currentPreview);
+            }
         },
         setPanel(panelNode) {
             currentPanel = panelNode;
