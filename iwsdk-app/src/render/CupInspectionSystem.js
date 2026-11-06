@@ -15,15 +15,30 @@
 
 import { createSystem } from '@iwsdk/core';
 import { Box3, Frustum, Matrix4, Raycaster, Vector3 } from 'three';
+import { applyPresetToPreviewRoot } from '../scene-assets/cup-preview.scene-asset.js';
+import { KENDAMA_PRESET_IDS } from './KendamaPresets.js';
+
+/**
+ * Initial canonical preset matching the active scene definition in main.iwsdk.scene.json.
+ * @readonly
+ */
+export const DEFAULT_PRESET_ID = KENDAMA_PRESET_IDS.PORCELAIN_DREAMS;
 
 export class CupInspectionSystem extends createSystem({}) {
+    /**
+     * Canonical active Kendama preset identifier.
+     * @type {string}
+     */
+    currentPresetId = DEFAULT_PRESET_ID;
+
     init() {
+        this.currentPresetId = DEFAULT_PRESET_ID;
         this.cupPreviewNode = null;
         this.autoRotate = true;
         this.rotationSpeed = 0.35; // ~20 degrees per second for comfortable VR inspection
 
         console.log('[DIAGNOSTIC] CupInspectionSystem.init() invoked');
-        const cupNode = this.world.getSceneObject('cup-preview');
+        const cupNode = this.world?.getSceneObject?.('cup-preview') ?? null;
         console.log('[DIAGNOSTIC] world.getSceneObject("cup-preview") returned:', !!cupNode, cupNode?.name);
         if (cupNode) {
             this.cupPreviewNode = cupNode;
@@ -34,7 +49,7 @@ export class CupInspectionSystem extends createSystem({}) {
             const sceneHierarchy = [];
             while (current) {
                 sceneHierarchy.push(`${current.name || current.type} (id: ${current.userData?.iwsdkSceneNodeId || 'none'})`);
-                if (current === this.world.scene) {
+                if (current === this.world?.scene) {
                     attachedToScene = true;
                     break;
                 }
@@ -192,7 +207,7 @@ export class CupInspectionSystem extends createSystem({}) {
             }
 
             // 6. Occlusion / Plinth Height Check
-            const plinth = this.world.scene.getObjectByName('Select Plinth') || this.world.scene.getObjectByName('select-plinth');
+            const plinth = this.world?.scene ? (this.world.scene.getObjectByName?.('Select Plinth') || this.world.scene.getObjectByName?.('select-plinth')) : null;
             if (plinth) {
                 const plinthPos = new Vector3();
                 plinth.getWorldPosition(plinthPos);
@@ -217,7 +232,7 @@ export class CupInspectionSystem extends createSystem({}) {
             }
 
             // 7. Line-of-Sight Raycast Check
-            if (camera && centerCupMesh) {
+            if (camera && centerCupMesh && this.world?.scene?.children) {
                 const centerPos = new Vector3();
                 centerCupMesh.getWorldPosition(centerPos);
                 const raycaster = new Raycaster();
@@ -248,7 +263,7 @@ export class CupInspectionSystem extends createSystem({}) {
         // Keyboard navigation for desktop browser inspection
         this.handleKeyDown = (event) => {
             if (!this.cupPreviewNode) {
-                this.cupPreviewNode = this.world.getSceneObject('cup-preview');
+                this.cupPreviewNode = this.world?.getSceneObject?.('cup-preview') ?? null;
             }
             if (!this.cupPreviewNode) return;
 
@@ -291,12 +306,37 @@ export class CupInspectionSystem extends createSystem({}) {
 
     update(delta) {
         if (!this.cupPreviewNode) {
-            this.cupPreviewNode = this.world.getSceneObject('cup-preview');
+            this.cupPreviewNode = this.world?.getSceneObject?.('cup-preview') ?? null;
         }
 
         if (this.cupPreviewNode && this.autoRotate && delta > 0) {
             this.cupPreviewNode.rotation.y += this.rotationSpeed * delta;
         }
+    }
+
+    /**
+     * Selects and applies a Kendama preset to the active showroom preview in-place.
+     *
+     * Resolves the requested preset, validates the preview root and components,
+     * applies the materials across all three inspection models, and updates
+     * currentPresetId upon successful application.
+     *
+     * @param {string | object} presetId - Canonical preset ID (e.g. 'galaxy-wood') or preset object.
+     * @returns {object | null} The applied preset object, or null if preview root is unavailable.
+     */
+    selectPreset(presetId) {
+        if (!this.cupPreviewNode) {
+            this.cupPreviewNode = this.world?.getSceneObject?.('cup-preview') ?? null;
+        }
+
+        if (!this.cupPreviewNode) {
+            console.warn('[CupInspectionSystem] selectPreset: "cup-preview" scene object is currently unavailable.');
+            return null;
+        }
+
+        const appliedPreset = applyPresetToPreviewRoot(this.cupPreviewNode, presetId);
+        this.currentPresetId = appliedPreset.id;
+        return appliedPreset;
     }
 }
 
