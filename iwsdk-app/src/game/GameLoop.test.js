@@ -1804,5 +1804,120 @@ describe('GameLoop (Person A)', () => {
       // No miss should have been produced
       expect(missEvents.length).toBe(0);
     });
+
+    describe('Flight-end clamp & pre-clamp catch evaluation', () => {
+      it('on the landing tick, evaluateCatch receives a non-zero downward velocity', () => {
+        let evaluatedVelocityOnLanding = null;
+        vi.spyOn(detector, 'evaluateCatch').mockImplementation((pos, vel) => {
+          if (!gameLoop.trajectory.isAirborne) {
+            evaluatedVelocityOnLanding = { ...vel };
+          }
+          return { confirmed: false, valid: false, reason: 'out_of_range' };
+        });
+
+        gameLoop.launchBall();
+
+        // Run until landing tick (53 frames * 0.016 s = 0.848 s >= FLIGHT_DURATION)
+        for (let i = 0; i < 53; i++) {
+          gameLoop.catchDetector.update(0.016, kenGroup);
+          gameLoop.scoreManager.update(0.016);
+        }
+
+        expect(evaluatedVelocityOnLanding).not.toBeNull();
+        expect(evaluatedVelocityOnLanding.y).toBeLessThan(0);
+        expect(Math.abs(evaluatedVelocityOnLanding.y - (-1.0488))).toBeLessThan(0.001);
+      });
+
+      it('a catch whose all checks pass on the landing tick is confirmed (catch beats the expiry miss)', () => {
+        const catchEvents = [];
+        const missEvents = [];
+        eventBus.on(Events.CATCH, (evt) => catchEvents.push(evt));
+        eventBus.on(Events.MISS, (evt) => missEvents.push(evt));
+
+        gameLoop.launchBall();
+
+        // 52 ticks in air away from cup
+        for (let i = 0; i < 52; i++) {
+          gameLoop.catchDetector.update(0.016, kenGroup);
+          gameLoop.scoreManager.update(0.016);
+        }
+
+        // On landing tick (tick 53), evaluateCatch confirms catch
+        vi.spyOn(detector, 'evaluateCatch').mockReturnValue({
+          confirmed: true,
+          valid: true,
+          cupKey: CupKey.BIG_CUP,
+          catchType: 'clean',
+          details: { distance: 0.005, relativeSpeed: 0.1, approachDot: 0.98 },
+        });
+
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+
+        expect(catchEvents.length).toBe(1);
+        expect(missEvents.length).toBe(0);
+        expect(catchFlow.state).toBe('catching');
+      });
+
+      it('after landing with no catch exactly one MISS', () => {
+        const missEvents = [];
+        eventBus.on(Events.MISS, (evt) => missEvents.push(evt));
+
+        gameLoop.launchBall();
+
+        // Run past landing
+        for (let i = 0; i < 60; i++) {
+          gameLoop.catchDetector.update(0.016, kenGroup);
+          gameLoop.scoreManager.update(0.016);
+        }
+
+        expect(missEvents.length).toBe(1);
+        expect(catchFlow.state).toBe('seated');
+      });
+
+      it('velocity passed to the detector is identical whether the final tick lands slightly before or after FLIGHT_DURATION (test with dt = 1/60, 1/72, 1/90)', () => {
+        const dts = [1 / 60, 1 / 72, 1 / 90];
+        const landingVelocities = [];
+
+        for (const dt of dts) {
+          const freshBus = new EventBus();
+          const freshDetector = new KendamaInputAndDetector({ gameplayKenGroup: kenGroup });
+          const freshFlow = new CatchFlow();
+          const loop = new GameLoop({
+            eventBus: freshBus,
+            kenGroup,
+            detector: freshDetector,
+            catchFlow: freshFlow,
+          });
+
+          let capturedLandingVel = null;
+          vi.spyOn(freshDetector, 'evaluateCatch').mockImplementation((pos, vel) => {
+            if (!loop.trajectory.isAirborne) {
+              capturedLandingVel = { ...vel };
+            }
+            return { confirmed: false, valid: false, reason: 'out_of_range' };
+          });
+
+          loop.launchBall();
+
+          // Step until trajectory lands
+          for (let step = 0; step < 120; step++) {
+            loop.catchDetector.update(dt, kenGroup);
+            loop.scoreManager.update(dt);
+            if (!loop.trajectory.isAirborne && capturedLandingVel) {
+              break;
+            }
+          }
+
+          expect(capturedLandingVel).not.toBeNull();
+          landingVelocities.push(capturedLandingVel.y);
+        }
+
+        expect(landingVelocities.length).toBe(3);
+        expect(landingVelocities[0]).toBeLessThan(0);
+        expect(landingVelocities[0]).toBeCloseTo(landingVelocities[1], 5);
+        expect(landingVelocities[1]).toBeCloseTo(landingVelocities[2], 5);
+      });
+    });
   });
 });

@@ -333,5 +333,48 @@ describe('BallTrajectory Module', () => {
                 `Expected apex height ~0.22 m (+/-0.01), got ${maxApexHeightAboveLaunch}`
             );
         });
+
+        it('h. preserves pre-clamp velocity in lastAirVelocity when flight ends at landing', () => {
+            const trajectory = new BallTrajectory();
+            trajectory.launch({ x: 0, y: 1.0, z: 0 });
+
+            // Run until landing
+            trajectory.update(FLIGHT_DURATION + 0.01);
+
+            // Velocity clamped to 0
+            assert.equal(trajectory.mode, BallTrajectoryMode.SEATED);
+            assert.equal(trajectory.state.velocity.y, 0.0);
+
+            // lastAirVelocity preserved and non-zero downward
+            assert.ok(trajectory.state.lastAirVelocity.y < 0);
+            assert.ok(Math.abs(trajectory.state.lastAirVelocity.y - (-INITIAL_VELOCITY_Y)) < 1e-6);
+            assert.ok(Math.abs(trajectory.lastAirVelocity.y - (-INITIAL_VELOCITY_Y)) < 1e-6);
+        });
+
+        it('i. lastAirVelocity is identical whether the final tick lands slightly before or after FLIGHT_DURATION across dt = 1/60, 1/72, 1/90', () => {
+            const frameRates = [1 / 60, 1 / 72, 1 / 90];
+            const landingVelocities = [];
+
+            for (const dt of frameRates) {
+                const trajectory = new BallTrajectory();
+                trajectory.launch({ x: 0, y: 1.0, z: 0 });
+
+                // Step frames until flight completion
+                let elapsed = 0;
+                while (trajectory.isAirborne && elapsed < 2.0) {
+                    trajectory.update(dt);
+                    elapsed += dt;
+                }
+
+                assert.equal(trajectory.mode, BallTrajectoryMode.SEATED);
+                landingVelocities.push(trajectory.state.lastAirVelocity.y);
+            }
+
+            // All three frame rates produce identical pre-clamp landing velocity
+            assert.equal(landingVelocities.length, 3);
+            assert.ok(Math.abs(landingVelocities[0] - (-INITIAL_VELOCITY_Y)) < 1e-6);
+            assert.equal(landingVelocities[0], landingVelocities[1]);
+            assert.equal(landingVelocities[1], landingVelocities[2]);
+        });
     });
 });

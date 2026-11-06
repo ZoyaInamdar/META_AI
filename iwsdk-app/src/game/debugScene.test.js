@@ -393,16 +393,18 @@ describe('debugScene Module', () => {
       expect.stringContaining('kenRotDeg: (0.00°, 0.00°, 0.00°)')
     );
 
-    // 2. Final tick transition: from air to seated (velocity zeroed upon landing)
+    // 2. Final tick transition: from air to seated (pre-clamp velocity preserved)
     consoleSpy.mockClear();
     mockGameLoop.trajectory.state.velocity = { x: 0, y: 0, z: 0 };
+    mockGameLoop.trajectory.state.lastAirVelocity = { x: 0, y: -1.0488, z: 0 };
+    mockGameLoop.lastEvaluatedVelocity = { x: 0, y: -1.0488, z: 0 };
     result.onFrame({ position: { x: 0, y: 1.25, z: -0.45 }, mode: 'seated' });
 
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('[DEBUG FinalTick] flight: 1 | target: big | cupPos: (')
     );
     expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('evalVel: (0.0000, 0.0000, 0.0000) [post-clamp (zeroed)]')
+      expect.stringContaining('evalVel: (0.0000, -1.0488, 0.0000) [pre-clamp]')
     );
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('kenRotDeg: (0.00°, 0.00°, 0.00°)')

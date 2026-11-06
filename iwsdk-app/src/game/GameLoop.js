@@ -371,7 +371,10 @@ export class GameLoop {
     // 3. Catch candidate evaluation while in air mode
     if (this.catchFlow.state === 'air' && this._isTrackingValid) {
       const ballPos = this.catchFlow.ballPosition;
-      const ballVel = this.trajectory.state.velocity;
+      const rawVel = trajState?.velocity ?? this.trajectory?.state?.velocity ?? { x: 0, y: 0, z: 0 };
+      const lastAir = trajState?.lastAirVelocity ?? this.trajectory?.state?.lastAirVelocity ?? this.trajectory?.lastAirVelocity;
+      const isLandingTick = (!trajState?.isAirborne || trajState?.mode === 'seated');
+      const ballVel = (isLandingTick && lastAir) ? lastAir : rawVel;
       const nowSec = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
 
       this.lastEvaluatedVelocity = ballVel ? { ...ballVel } : { x: 0, y: 0, z: 0 };

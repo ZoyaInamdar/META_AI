@@ -452,7 +452,7 @@ export function setupDebugScene(options = {}) {
       const kenRot = getKenEulerDeg(kenGroup);
 
       // Item 3: Velocity passed to evaluateCatch on final tick and pre/post clamp status
-      const evalVel = gameLoop?.lastEvaluatedVelocity ?? trajectory?.state?.velocity ?? { x: 0, y: 0, z: 0 };
+      const evalVel = gameLoop?.lastEvaluatedVelocity ?? trajectory?.state?.lastAirVelocity ?? trajectory?.state?.velocity ?? { x: 0, y: 0, z: 0 };
       const isZeroed = Math.hypot(evalVel.x, evalVel.y, evalVel.z) < 1e-6;
       const clampType = isZeroed ? 'post-clamp (zeroed)' : 'pre-clamp';
 
