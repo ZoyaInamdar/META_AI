@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as THREE from 'three';
 import { setupDebugScene, isDebugMode, getTargetOverride } from './debugScene.js';
+import { CatchFlow, computeCupWorldSeatPoint } from './CatchFlow.js';
 import { BALL_RADIUS } from '../input/cupConfigs.js';
 import { EventBus } from '../contracts/EventBus.js';
 import { Events, CatchResult, CatchType } from '../contracts/Interfaces.js';
@@ -637,5 +638,78 @@ describe('debugScene Module', () => {
     );
 
     result.cleanup();
+  });
+
+  it('17. with ?target=big the ball is seated at the big cup position before launch, after MISS returns to big cup; without override remains spike', () => {
+    const ken = new THREE.Group();
+    ken.position.set(0.1, 1.25, -0.45);
+
+    // Case A: With ?target=big override
+    const catchFlowBig = new CatchFlow({ initialCup: 'spike', kenPose: ken });
+    expect(catchFlowBig.seatCupKey).toBe('spike');
+
+    const loopBig = {
+      eventBus,
+      gameplayKenGroup: ken,
+      catchFlow: catchFlowBig,
+      activeTargetCup: 'big',
+      getBallState: () => ({ position: catchFlowBig.ballPosition, mode: catchFlowBig.state }),
+    };
+
+    const debugBig = setupDebugScene({
+      world: mockWorld,
+      game: { eventBus, gameplayKenGroup: ken },
+      gameLoop: loopBig,
+      debug: true,
+      target: 'big',
+    });
+
+    // 1. Ball is seated at big cup before launch
+    expect(catchFlowBig.seatCupKey).toBe('big');
+    const expectedBigSeat = computeCupWorldSeatPoint('big', ken);
+    expect(catchFlowBig.ballPosition.x).toBeCloseTo(expectedBigSeat.x, 5);
+    expect(catchFlowBig.ballPosition.y).toBeCloseTo(expectedBigSeat.y, 5);
+    expect(catchFlowBig.ballPosition.z).toBeCloseTo(expectedBigSeat.z, 5);
+
+    // 2. Launch ball
+    catchFlowBig.onLaunch(10);
+    expect(catchFlowBig.state).toBe('air');
+
+    // 3. After MISS, ball returns to big cup
+    catchFlowBig.reportMiss(ken);
+    expect(catchFlowBig.state).toBe('seated');
+    expect(catchFlowBig.seatCupKey).toBe('big');
+    expect(catchFlowBig.ballPosition.x).toBeCloseTo(expectedBigSeat.x, 5);
+    expect(catchFlowBig.ballPosition.y).toBeCloseTo(expectedBigSeat.y, 5);
+    expect(catchFlowBig.ballPosition.z).toBeCloseTo(expectedBigSeat.z, 5);
+
+    debugBig.cleanup();
+
+    // Case B: Without target override (?target absent)
+    const catchFlowSpike = new CatchFlow({ initialCup: 'spike', kenPose: ken });
+    const loopSpike = {
+      eventBus,
+      gameplayKenGroup: ken,
+      catchFlow: catchFlowSpike,
+      activeTargetCup: 'big',
+      getBallState: () => ({ position: catchFlowSpike.ballPosition, mode: catchFlowSpike.state }),
+    };
+
+    const debugSpike = setupDebugScene({
+      world: mockWorld,
+      game: { eventBus, gameplayKenGroup: ken },
+      gameLoop: loopSpike,
+      debug: true,
+      // no target override
+    });
+
+    // Behavior is unchanged: seat cup is spike
+    expect(catchFlowSpike.seatCupKey).toBe('spike');
+    const expectedSpikeSeat = computeCupWorldSeatPoint('spike', ken);
+    expect(catchFlowSpike.ballPosition.x).toBeCloseTo(expectedSpikeSeat.x, 5);
+    expect(catchFlowSpike.ballPosition.y).toBeCloseTo(expectedSpikeSeat.y, 5);
+    expect(catchFlowSpike.ballPosition.z).toBeCloseTo(expectedSpikeSeat.z, 5);
+
+    debugSpike.cleanup();
   });
 });

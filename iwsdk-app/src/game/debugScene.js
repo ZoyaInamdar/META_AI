@@ -217,14 +217,7 @@ export function setupDebugScene(options = {}) {
     return null;
   }
 
-  // 1. Force target cup override if ?target=big|small|base|spike is specified (Item 1)
-  const targetOverride = options.target || getTargetOverride();
-  if (targetOverride && gameLoop) {
-    gameLoop.targetOverride = targetOverride;
-    gameLoop.activeTargetCup = targetOverride;
-  }
-
-  const kenGroup = game?.gameplayKenGroup;
+  const kenGroup = game?.gameplayKenGroup ?? gameLoop?.gameplayKenGroup;
   let kenBox = null;
   if (kenGroup && typeof kenGroup.add === 'function') {
     const kenBoxGeometry = new BoxGeometry(0.06, 0.18, 0.06);
@@ -263,6 +256,16 @@ export function setupDebugScene(options = {}) {
       }
     }
   };
+
+  // 1. Force target cup override if ?target=big|small|base|spike is specified (debug only)
+  const targetOverride = options.target || getTargetOverride();
+  if (targetOverride && gameLoop) {
+    gameLoop.targetOverride = targetOverride;
+    gameLoop.activeTargetCup = targetOverride;
+    if (gameLoop.catchFlow && typeof gameLoop.catchFlow.resetSeatCup === 'function') {
+      gameLoop.catchFlow.resetSeatCup(targetOverride, kenGroup);
+    }
+  }
 
   // Sync initial position if already available
   const initialBallState = gameLoop?.getBallState?.() ?? game?.pipeline?.catchDetector?.getBallState?.();

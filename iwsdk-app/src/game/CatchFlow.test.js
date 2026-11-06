@@ -335,5 +335,23 @@ describe('CatchFlow', () => {
             const secondRes = flow.update(0.016, originPose, { mode: 'seated' });
             expect(secondRes).toBeNull();
         });
+
+        it('6. resetSeatCup re-seats the ball directly onto the specified cup and updates previousSeatCupKey', () => {
+            expect(flow.seatCupKey).toBe(CUP_IDS.SPIKE);
+
+            flow.resetSeatCup(CUP_IDS.BIG_CUP, originPose);
+            expect(flow.seatCupKey).toBe(CUP_IDS.BIG_CUP);
+
+            const expectedSeat = computeCupWorldSeatPoint(CUP_IDS.BIG_CUP, originPose);
+            expect(flow.ballPosition.x).toBeCloseTo(expectedSeat.x, 5);
+            expect(flow.ballPosition.y).toBeCloseTo(expectedSeat.y, 5);
+            expect(flow.ballPosition.z).toBeCloseTo(expectedSeat.z, 5);
+
+            // After launch and miss, it returns to big cup
+            flow.onLaunch(99);
+            flow.reportMiss(originPose);
+            expect(flow.seatCupKey).toBe(CUP_IDS.BIG_CUP);
+            expect(flow.ballPosition.x).toBeCloseTo(expectedSeat.x, 5);
+        });
     });
 });

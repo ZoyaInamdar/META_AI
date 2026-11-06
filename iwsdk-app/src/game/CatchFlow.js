@@ -217,6 +217,17 @@ export class CatchFlow {
     }
 
     /**
+     * Debug helper to re-seat the ball directly onto a specified cup.
+     * @param {string} cupKey
+     * @param {any} [kenPose=null]
+     */
+    resetSeatCup(cupKey, kenPose = null) {
+        this._seatCupKey = cupKey;
+        this._previousSeatCupKey = cupKey;
+        this._ballPosition = { ...computeCupWorldSeatPoint(cupKey, kenPose) };
+    }
+
+    /**
      * Defensive copy of current ball position in world space.
      * @returns {{ x: number, y: number, z: number }}
      */
