@@ -38,6 +38,9 @@ export const DEFAULT_BORE_BEVEL_MARGIN = 0.0015;    // 1.50 mm radial lead-in be
 export const DEFAULT_BORE_APEX_CLEARANCE = 0.00225; // 2.25 mm radial clearance at bore ceiling
 
 // --- Authoritative Tama Geometry Constants ---
+/** Authoritative ball radius in meters (0.045 m) */
+export { BALL_RADIUS };
+
 /** Default outer radius of the Tama in meters (0.045 m) */
 export const DEFAULT_TAMA_RADIUS = BALL_RADIUS;
 
