@@ -56,11 +56,18 @@ World.create(document.getElementById('scene-container'), projectOptions).then((w
 
     // Resolve launchHand: defaults to 'left' (off hand), overridable via ?launchHand=right|either in URL
     let launchHand = 'left';
+    let targetOverride = null;
     if (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') {
         const params = new URLSearchParams(window.location.search);
         const paramVal = params.get('launchHand');
         if (paramVal === 'right' || paramVal === 'either' || paramVal === 'left') {
             launchHand = paramVal;
+        }
+        if (params.has('debug')) {
+            const t = params.get('target');
+            if (t === 'big' || t === 'small' || t === 'base' || t === 'spike') {
+                targetOverride = t;
+            }
         }
     }
 
@@ -73,6 +80,7 @@ World.create(document.getElementById('scene-container'), projectOptions).then((w
         hand: 'right',
         gripSource: 'wrist',
         launchHand,
+        targetOverride,
     });
 
     // Initialize game pipeline and register KendamaXRSystem into IWSDK World
