@@ -101,8 +101,10 @@ export class GameLoop {
       targetCadenceSeconds,
     });
 
-    this.activeTargetCup = initialCup;
+    this.targetOverride = options.targetOverride || null;
+    this.activeTargetCup = this.targetOverride || initialCup;
     this._isTrackingValid = true;
+    this.lastEvaluatedVelocity = null;
 
     // WebXR context references for wrist joint extraction
     this.referenceSpace = options.referenceSpace || null;
@@ -124,6 +126,9 @@ export class GameLoop {
 
     // Subscriptions to Person B events
     this._unsubTarget = this.eventBus.on(Events.TARGET, (target) => {
+      if (this.targetOverride) {
+        return; // Forced target in debug mode
+      }
       if (target && target.cupKey) {
         this.activeTargetCup = target.cupKey;
       }
@@ -368,6 +373,8 @@ export class GameLoop {
       const ballPos = this.catchFlow.ballPosition;
       const ballVel = this.trajectory.state.velocity;
       const nowSec = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+
+      this.lastEvaluatedVelocity = ballVel ? { ...ballVel } : { x: 0, y: 0, z: 0 };
 
       const evalRes = this.detector.evaluateCatch(
         ballPos,

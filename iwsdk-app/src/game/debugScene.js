@@ -181,6 +181,25 @@ export function isDebugMode() {
 }
 
 /**
+ * Resolves forced target cup override from `?target=big|small|base|spike` URL query parameter.
+ * Active exclusively when debug mode is enabled.
+ *
+ * @returns {string|null}
+ */
+export function getTargetOverride() {
+  if (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('debug')) {
+      const t = params.get('target');
+      if (t === 'big' || t === 'small' || t === 'base' || t === 'spike') {
+        return t;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Initializes debug visuals and diagnostic logging if debug mode is active.
  *
  * @param {Object} [options={}]
@@ -188,13 +207,21 @@ export function isDebugMode() {
  * @param {any} [options.game] - The return value of initGame({ world, gameLoop, ... })
  * @param {any} [options.gameLoop] - The Person A GameLoop instance
  * @param {boolean} [options.debug] - Optional override for isDebugMode()
- * @returns {{ kenBox: Mesh|null, tamaSphere: Mesh|null, syncSpherePosition: Function, logDebugStatus: Function, getDiagnosticState: Function, cleanup: Function } | null}
+ * @param {string} [options.target] - Optional override for target cup
+ * @returns {{ kenBox: Mesh|null, tamaSphere: Mesh|null, syncSpherePosition: Function, logDebugStatus: Function, getDiagnosticState: Function, onFrame: Function, cleanup: Function } | null}
  */
 export function setupDebugScene(options = {}) {
   const { world, game, gameLoop, debug } = options;
   const active = debug !== undefined ? Boolean(debug) : isDebugMode();
   if (!active) {
     return null;
+  }
+
+  // 1. Force target cup override if ?target=big|small|base|spike is specified (Item 1)
+  const targetOverride = options.target || getTargetOverride();
+  if (targetOverride && gameLoop) {
+    gameLoop.targetOverride = targetOverride;
+    gameLoop.activeTargetCup = targetOverride;
   }
 
   const kenGroup = game?.gameplayKenGroup;
@@ -251,12 +278,24 @@ export function setupDebugScene(options = {}) {
   let unsubBall = null;
   let unsubCatch = null;
   let unsubMiss = null;
+  let unsubScore = null;
   if (bus && typeof bus.on === 'function') {
     unsubCatch = bus.on(Events.CATCH, (result) => {
       lastCatchResult = result ?? null;
     });
     unsubMiss = bus.on(Events.MISS, (missPayload) => {
       lastCatchResult = missPayload ? { type: 'MISS', ...missPayload } : { type: 'MISS' };
+      console.log(`[DEBUG Miss] flightId: ${missPayload?.flightId ?? 'none'}`);
+    });
+    unsubScore = bus.on(Events.SCORE, (eventPayload) => {
+      const scoreObj = eventPayload?.payload || eventPayload;
+      const mults = scoreObj?.multipliers;
+      const multStr = mults
+        ? `accuracy: ${mults.accuracy}, cadence: ${mults.cadence}, streak: ${mults.streak}, total: ${mults.total}`
+        : 'none';
+      console.log(
+        `[DEBUG Score] catchType: ${scoreObj?.catchType} | multipliers: (${multStr}) | awardedEnergy: ${scoreObj?.awardedEnergy} | totalEnergy: ${scoreObj?.totalEnergy} | streak: ${scoreObj?.currentStreak ?? scoreObj?.streak}`
+      );
     });
   }
 
@@ -264,6 +303,9 @@ export function setupDebugScene(options = {}) {
   let activeFlightId = null;
   let flightMinDistance = Infinity;
   let flightMinDistanceTime = 0.0;
+  let ticksInsideAssist = 0;
+  let ticksInsideClean = 0;
+  let lastRecordedDt = 0.016;
   let lastAirOneSecondLogTime = -1.0;
   let loggedTicksForFlight = new Set();
   let prevBallMode = null;
@@ -297,17 +339,36 @@ export function setupDebugScene(options = {}) {
       activeFlightId = currentFlightId;
       flightMinDistance = Infinity;
       flightMinDistanceTime = 0.0;
+      ticksInsideAssist = 0;
+      ticksInsideClean = 0;
       lastAirOneSecondLogTime = 0.0;
       loggedTicksForFlight = new Set();
 
       // Item 3: Log target cup normal/position and Ken rotation at launch
       const cupPose = getCupWorldPose(activeCup, kenGroup);
       const kenRot = getKenEulerDeg(kenGroup);
+
+      // Item 1: Ball world position at launch, seat cup, and distances to all 4 cup centers
+      const ballLaunchPos = ballState?.position ?? gameLoop?.catchFlow?.ballPosition ?? trajectory?.state?.position ?? { x: 0, y: 0, z: 0 };
+      const seatCup = gameLoop?.catchFlow?.seatCupKey ?? 'unknown';
+      const cupKeys = ['big', 'small', 'base', 'spike'];
+      const cupDists = cupKeys.map(key => {
+        const p = getCupWorldPose(key, kenGroup);
+        const d = Math.hypot(
+          ballLaunchPos.x - p.position.x,
+          ballLaunchPos.y - p.position.y,
+          ballLaunchPos.z - p.position.z
+        );
+        return `${key}: ${d.toFixed(4)}m`;
+      }).join(', ');
+
       console.log(
-        `[DEBUG Launch] flight: ${currentFlightId} | target: ${activeCup} | ` +
+        `[DEBUG Launch] flight: ${currentFlightId} | target: ${activeCup} | seatCup: ${seatCup} | ` +
+        `ballPos: (${ballLaunchPos.x.toFixed(4)}, ${ballLaunchPos.y.toFixed(4)}, ${ballLaunchPos.z.toFixed(4)}) | ` +
         `cupPos: (${cupPose.position.x.toFixed(4)}, ${cupPose.position.y.toFixed(4)}, ${cupPose.position.z.toFixed(4)}) | ` +
         `cupNorm: (${cupPose.normal.x.toFixed(4)}, ${cupPose.normal.y.toFixed(4)}, ${cupPose.normal.z.toFixed(4)}) | ` +
-        `kenRotDeg: (${kenRot.x.toFixed(2)}°, ${kenRot.y.toFixed(2)}°, ${kenRot.z.toFixed(2)}°)`
+        `kenRotDeg: (${kenRot.x.toFixed(2)}°, ${kenRot.y.toFixed(2)}°, ${kenRot.z.toFixed(2)}°) | ` +
+        `cupDists: (${cupDists})`
       );
     }
 
@@ -322,8 +383,23 @@ export function setupDebugScene(options = {}) {
         ? Math.hypot(ballState.position.x - cupPose.position.x, ballState.position.y - cupPose.position.y, ballState.position.z - cupPose.position.z)
         : Infinity);
 
-      // Track closest distance for Item 4
-      if (Number.isFinite(dist) && dist < flightMinDistance) {
+      const cleanR = evalRes?.details?.cleanRadius ?? 0.04;
+      const assistR = evalRes?.details?.assistedRadius ?? 0.06;
+
+      // Track ticks inside R_assist and R_clean (Item 4)
+      if (Number.isFinite(dist)) {
+        if (dist <= assistR) {
+          ticksInsideAssist++;
+        }
+        if (dist <= cleanR) {
+          ticksInsideClean++;
+        }
+      }
+      lastRecordedDt = dt;
+
+      // Track closest distance for Item 2 & 4 (only count ticks after apex vy < 0)
+      const vy = trajectory?.state?.velocity?.y ?? ballState?.velocity?.y ?? 0.0;
+      if (vy < 0.0 && Number.isFinite(dist) && dist < flightMinDistance) {
         flightMinDistance = dist;
         flightMinDistanceTime = elapsed;
       }
@@ -333,8 +409,6 @@ export function setupDebugScene(options = {}) {
       const ticksRemaining = Math.round(remainingTime / dt);
 
       const logTargetEvaluation = (tag) => {
-        const cleanR = evalRes?.details?.cleanRadius ?? 0.04;
-        const assistR = evalRes?.details?.assistedRadius ?? 0.06;
         const approachDot = evalRes?.details?.approachDot ?? 0.0;
         const relSpeed = evalRes?.details?.relativeSpeed ?? 0.0;
         const maxRelSpeed = gameLoop?.detector?.maxRelativeSpeed;
@@ -376,11 +450,18 @@ export function setupDebugScene(options = {}) {
       // Item 3: Log target cup normal/position & Ken euler degrees on the final tick
       const cupPose = getCupWorldPose(activeCup, kenGroup);
       const kenRot = getKenEulerDeg(kenGroup);
+
+      // Item 3: Velocity passed to evaluateCatch on final tick and pre/post clamp status
+      const evalVel = gameLoop?.lastEvaluatedVelocity ?? trajectory?.state?.velocity ?? { x: 0, y: 0, z: 0 };
+      const isZeroed = Math.hypot(evalVel.x, evalVel.y, evalVel.z) < 1e-6;
+      const clampType = isZeroed ? 'post-clamp (zeroed)' : 'pre-clamp';
+
       console.log(
         `[DEBUG FinalTick] flight: ${activeFlightId ?? currentFlightId} | target: ${activeCup} | ` +
         `cupPos: (${cupPose.position.x.toFixed(4)}, ${cupPose.position.y.toFixed(4)}, ${cupPose.position.z.toFixed(4)}) | ` +
         `cupNorm: (${cupPose.normal.x.toFixed(4)}, ${cupPose.normal.y.toFixed(4)}, ${cupPose.normal.z.toFixed(4)}) | ` +
-        `kenRotDeg: (${kenRot.x.toFixed(2)}°, ${kenRot.y.toFixed(2)}°, ${kenRot.z.toFixed(2)}°)`
+        `kenRotDeg: (${kenRot.x.toFixed(2)}°, ${kenRot.y.toFixed(2)}°, ${kenRot.z.toFixed(2)}°) | ` +
+        `evalVel: (${evalVel.x.toFixed(4)}, ${evalVel.y.toFixed(4)}, ${evalVel.z.toFixed(4)}) [${clampType}]`
       );
 
       // Item 2: Log final tick target evaluation if not already logged
@@ -402,6 +483,7 @@ export function setupDebugScene(options = {}) {
 
         console.log(
           `[DEBUG TargetEval Final] flight: ${activeFlightId ?? currentFlightId} | target: ${activeCup} | ` +
+          `evalVel: (${evalVel.x.toFixed(4)}, ${evalVel.y.toFixed(4)}, ${evalVel.z.toFixed(4)}) [${clampType}] | ` +
           `dist: ${Number.isFinite(dist) ? dist.toFixed(4) : 'N/A'}m (R_clean: ${cleanR.toFixed(4)}m, R_assist: ${assistR.toFixed(4)}m) | ` +
           `dot: ${approachDot.toFixed(3)} (req < -0.2) | ` +
           `relSpeed: ${relSpeed.toFixed(3)} m/s (max: ${maxRelSpeedStr}) | ` +
@@ -411,12 +493,21 @@ export function setupDebugScene(options = {}) {
         );
       }
 
-      // Item 4: Once per flight, log closest distance reached between ball and target cup, and when it happened
+      // Item 2 & 4: Once per flight, log closest distance reached after apex
       console.log(
         `[DEBUG Closest] flight: ${activeFlightId ?? currentFlightId} | target: ${activeCup} | ` +
         `minDistance: ${Number.isFinite(flightMinDistance) ? flightMinDistance.toFixed(4) : 'N/A'}m at t=${flightMinDistanceTime.toFixed(3)}s`
       );
 
+      // Item 4: Once per flight, log ticks spent inside R_assist and R_clean, and dt
+      console.log(
+        `[DEBUG Proximity] flight: ${activeFlightId ?? currentFlightId} | ` +
+        `ticksInsideAssist: ${ticksInsideAssist} | ticksInsideClean: ${ticksInsideClean} | ` +
+        `dt: ${(lastRecordedDt * 1000).toFixed(2)}ms (~${Math.round(1 / lastRecordedDt)} FPS)`
+      );
+
+      ticksInsideAssist = 0;
+      ticksInsideClean = 0;
       flightMinDistance = Infinity;
       activeFlightId = null;
     }
@@ -630,6 +721,7 @@ export function setupDebugScene(options = {}) {
     if (typeof unsubBall === 'function') unsubBall();
     if (typeof unsubCatch === 'function') unsubCatch();
     if (typeof unsubMiss === 'function') unsubMiss();
+    if (typeof unsubScore === 'function') unsubScore();
 
     if (kenBox && kenGroup && typeof kenGroup.remove === 'function') {
       kenGroup.remove(kenBox);

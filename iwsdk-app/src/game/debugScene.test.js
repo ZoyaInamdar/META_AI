@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as THREE from 'three';
-import { setupDebugScene, isDebugMode } from './debugScene.js';
+import { setupDebugScene, isDebugMode, getTargetOverride } from './debugScene.js';
 import { BALL_RADIUS } from '../input/cupConfigs.js';
 import { EventBus } from '../contracts/EventBus.js';
 import { Events, CatchResult, CatchType } from '../contracts/Interfaces.js';
@@ -368,6 +368,10 @@ describe('debugScene Module', () => {
       flightDuration: 0.8390,
       state: { velocity: { x: 0, y: 1.0, z: 0 } },
     };
+    mockGameLoop.catchFlow = {
+      seatCupKey: 'big',
+      ballPosition: { x: 0, y: 1.25, z: -0.45 },
+    };
 
     const result = setupDebugScene({
       world: mockWorld,
@@ -380,18 +384,25 @@ describe('debugScene Module', () => {
     result.onFrame({ position: { x: 0, y: 1.25, z: -0.45 }, mode: 'air' });
 
     expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[DEBUG Launch] flight: 1 | target: big | cupPos: (')
+      expect.stringContaining('[DEBUG Launch] flight: 1 | target: big | seatCup: big | ballPos: (0.0000, 1.2500, -0.4500) | cupPos: (')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('cupDists: (big: ')
     );
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('kenRotDeg: (0.00°, 0.00°, 0.00°)')
     );
 
-    // 2. Final tick transition: from air to seated
+    // 2. Final tick transition: from air to seated (velocity zeroed upon landing)
     consoleSpy.mockClear();
+    mockGameLoop.trajectory.state.velocity = { x: 0, y: 0, z: 0 };
     result.onFrame({ position: { x: 0, y: 1.25, z: -0.45 }, mode: 'seated' });
 
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('[DEBUG FinalTick] flight: 1 | target: big | cupPos: (')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('evalVel: (0.0000, 0.0000, 0.0000) [post-clamp (zeroed)]')
     );
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('kenRotDeg: (0.00°, 0.00°, 0.00°)')
@@ -445,16 +456,16 @@ describe('debugScene Module', () => {
     result.cleanup();
   });
 
-  it('12. onFrame logs closest distance reached once per flight on flight end (Item 4)', () => {
+  it('12. onFrame logs closest distance reached once per flight on flight end (Item 4) ignoring vy >= 0 (Item 2)', () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     mockKenGroup.position.set(0.0, 1.25, -0.45);
     mockGameLoop.activeTargetCup = 'big';
     mockGameLoop.trajectory = {
       flightId: 3,
-      elapsed: 0.42,
+      elapsed: 0.10,
       flightDuration: 0.8390,
-      state: { velocity: { x: 0, y: 0.0, z: 0 } },
+      state: { velocity: { x: 0, y: 1.5, z: 0 } },
     };
 
     const result = setupDebugScene({
@@ -467,7 +478,17 @@ describe('debugScene Module', () => {
     // 1. Launch
     result.onFrame({ position: { x: 0, y: 1.25, z: -0.45 }, mode: 'air' });
 
-    // 2. Frame in air with closest distance 0.0210 m at t=0.42s
+    // 2. Proximity check while vy > 0 (ascent - before apex): distance 0.0100 m should NOT be recorded
+    mockGameLoop.lastCatchEvaluation = {
+      details: { distance: 0.0100 },
+      reason: null,
+      valid: true,
+    };
+    result.onFrame({ position: { x: 0, y: 1.30, z: -0.45 }, mode: 'air' });
+
+    // 3. Proximity check after apex (vy < 0): distance 0.0210 m at t=0.42s
+    mockGameLoop.trajectory.elapsed = 0.42;
+    mockGameLoop.trajectory.state.velocity.y = -0.5;
     mockGameLoop.lastCatchEvaluation = {
       details: { distance: 0.0210 },
       reason: null,
@@ -475,12 +496,142 @@ describe('debugScene Module', () => {
     };
     result.onFrame({ position: { x: 0, y: 1.40, z: -0.45 }, mode: 'air' });
 
-    // 3. Flight ends
+    // 4. Flight ends
     consoleSpy.mockClear();
     result.onFrame({ position: { x: 0, y: 1.25, z: -0.45 }, mode: 'seated' });
 
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('[DEBUG Closest] flight: 3 | target: big | minDistance: 0.0210m at t=0.420s')
+    );
+
+    result.cleanup();
+  });
+
+  it('13. getTargetOverride parses valid target cups when debug is enabled', () => {
+    const originalWindow = globalThis.window;
+    try {
+      globalThis.window = { location: { search: '?debug&target=spike' } };
+      expect(getTargetOverride()).toBe('spike');
+
+      globalThis.window = { location: { search: '?debug&target=base' } };
+      expect(getTargetOverride()).toBe('base');
+
+      globalThis.window = { location: { search: '?debug&target=small' } };
+      expect(getTargetOverride()).toBe('small');
+
+      globalThis.window = { location: { search: '?debug&target=big' } };
+      expect(getTargetOverride()).toBe('big');
+
+      globalThis.window = { location: { search: '?debug&target=invalid' } };
+      expect(getTargetOverride()).toBeNull();
+
+      globalThis.window = { location: { search: '?target=spike' } };
+      expect(getTargetOverride()).toBeNull();
+    } finally {
+      if (originalWindow !== undefined) {
+        globalThis.window = originalWindow;
+      } else {
+        delete globalThis.window;
+      }
+    }
+  });
+
+  it('14. setupDebugScene forces target cup override on gameLoop (Item 1)', () => {
+    mockGameLoop.activeTargetCup = 'big';
+    const result = setupDebugScene({
+      world: mockWorld,
+      game: mockGame,
+      gameLoop: mockGameLoop,
+      debug: true,
+      target: 'base',
+    });
+
+    expect(mockGameLoop.targetOverride).toBe('base');
+    expect(mockGameLoop.activeTargetCup).toBe('base');
+
+    result.cleanup();
+  });
+
+  it('15. setupDebugScene logs SCORE and MISS events (Item 3)', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const result = setupDebugScene({
+      world: mockWorld,
+      game: mockGame,
+      gameLoop: mockGameLoop,
+      debug: true,
+    });
+
+    eventBus.emit(Events.SCORE, {
+      catchType: CatchType.CLEAN,
+      multipliers: { accuracy: 1.5, cadence: 1.2, streak: 2.0, total: 3.6 },
+      awardedEnergy: 45,
+      totalEnergy: 120,
+      currentStreak: 3,
+    });
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG Score] catchType: CLEAN | multipliers: (accuracy: 1.5, cadence: 1.2, streak: 2, total: 3.6) | awardedEnergy: 45 | totalEnergy: 120 | streak: 3')
+    );
+
+    eventBus.emit(Events.MISS, { flightId: 42 });
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG Miss] flightId: 42')
+    );
+
+    result.cleanup();
+  });
+
+  it('16. onFrame logs ticks inside R_assist and R_clean, and frame rate on flight end (Item 4)', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    mockKenGroup.position.set(0.0, 1.25, -0.45);
+    mockGameLoop.activeTargetCup = 'big';
+    mockGameLoop.lastDt = 0.016;
+    mockGameLoop.trajectory = {
+      flightId: 4,
+      elapsed: 0.1,
+      flightDuration: 0.8390,
+      state: { velocity: { x: 0, y: -0.1, z: 0 } },
+    };
+
+    const result = setupDebugScene({
+      world: mockWorld,
+      game: mockGame,
+      gameLoop: mockGameLoop,
+      debug: true,
+    });
+
+    // Launch
+    result.onFrame({ position: { x: 0, y: 1.25, z: -0.45 }, mode: 'air' });
+
+    // Tick 1: inside R_assist (dist 0.05, assist=0.06, clean=0.04)
+    mockGameLoop.lastCatchEvaluation = {
+      details: { distance: 0.05, assistedRadius: 0.06, cleanRadius: 0.04 },
+      valid: true,
+    };
+    result.onFrame({ position: { x: 0, y: 1.30, z: -0.45 }, mode: 'air' });
+
+    // Tick 2: inside R_clean (dist 0.03, assist=0.06, clean=0.04)
+    mockGameLoop.lastCatchEvaluation = {
+      details: { distance: 0.03, assistedRadius: 0.06, cleanRadius: 0.04 },
+      valid: true,
+    };
+    result.onFrame({ position: { x: 0, y: 1.30, z: -0.45 }, mode: 'air' });
+
+    // Tick 3: outside both (dist 0.10)
+    mockGameLoop.lastCatchEvaluation = {
+      details: { distance: 0.10, assistedRadius: 0.06, cleanRadius: 0.04 },
+      valid: false,
+    };
+    result.onFrame({ position: { x: 0, y: 1.30, z: -0.45 }, mode: 'air' });
+
+    // Flight ends
+    consoleSpy.mockClear();
+    result.onFrame({ position: { x: 0, y: 1.25, z: -0.45 }, mode: 'seated' });
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG Proximity] flight: 4 | ticksInsideAssist: 2 | ticksInsideClean: 1 | dt: 16.00ms (~63 FPS)')
     );
 
     result.cleanup();
