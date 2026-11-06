@@ -9,6 +9,8 @@ import projectOptions from 'virtual:iwsdk-project';
 import { PanelSystem } from './panel.js';
 import { RobotSystem } from './robot.js';
 import { CupInspectionSystem } from './render/CupInspectionSystem.js';
+import { PresetSelectorSystem } from './preset-selector.js';
+import { CelestialEnvironmentSystem } from './render/CelestialEnvironment.js';
 import { initGame, gameplayKenGroup } from './main.js';
 import { GameLoop } from './game/GameLoop.js';
 import { HandPoseAdapter } from './input/HandPoseAdapter.js';
@@ -32,6 +34,24 @@ World.create(document.getElementById('scene-container'), projectOptions).then((w
     world.registerSystem(RobotSystem);
     world.registerSystem(PanelSystem);
     world.registerSystem(CupInspectionSystem);
+    world.registerSystem(PresetSelectorSystem);
+    world.registerSystem(CelestialEnvironmentSystem);
+
+    const envSystem = world.getSystem(CelestialEnvironmentSystem);
+    if (envSystem) {
+        let startupMode = 'showroom';
+        if (typeof window !== 'undefined' && window.location?.search) {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('mode') === 'gameplay') {
+                startupMode = 'gameplay';
+            }
+        }
+        envSystem.setMode(startupMode);
+        if (typeof window !== 'undefined') {
+            window.celestialEnvironment = envSystem;
+        }
+        console.log(`[CelestialEnvironmentSystem] Started in "${startupMode}" mode`);
+    }
 
     // Resolve launchHand: defaults to 'left' (off hand), overridable via ?launchHand=right|either in URL
     let launchHand = 'left';
