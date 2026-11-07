@@ -925,6 +925,7 @@ describe('GameLoop (Person A)', () => {
         eventBus,
         gameplayKenGroup: kenGroup,
         inputSource: adapter,
+        rollGain: 1.0,
         trajectory,
         catchFlow,
         detector,
@@ -1229,6 +1230,7 @@ describe('GameLoop (Person A)', () => {
         referenceSpace: refSpace,
         xrInputSource: inputSource,
         poseFilter: mockFilter,
+        rollGain: 1.0,
       });
 
       // Frame 1: Valid tracking
@@ -1283,6 +1285,7 @@ describe('GameLoop (Person A)', () => {
         referenceSpace: refSpace,
         xrInputSource: inputSource,
         poseFilter: mockFilter,
+        rollGain: 1.0,
       });
 
       // 1. Valid frame
@@ -1338,6 +1341,7 @@ describe('GameLoop (Person A)', () => {
         referenceSpace: refSpace,
         xrInputSource: inputSource,
         poseFilter: mockFilter,
+        rollGain: 1.0,
       });
 
       xrLoop.inputSystem.update(0.016, frame);
@@ -1917,6 +1921,120 @@ describe('GameLoop (Person A)', () => {
         expect(landingVelocities[0]).toBeLessThan(0);
         expect(landingVelocities[0]).toBeCloseTo(landingVelocities[1], 5);
         expect(landingVelocities[1]).toBeCloseTo(landingVelocities[2], 5);
+      });
+    });
+
+    // ========================================================================
+    // O. 2x Wrist-Roll Amplification Integration
+    // ========================================================================
+    describe('O. 2x Wrist-Roll Amplification Integration', () => {
+      it('GameLoop constructor initializes rollGain with DEFAULT_ROLL_GAIN (2.0) or custom option', () => {
+        const defaultLoop = new GameLoop({ gameplayKenGroup: kenGroup });
+        expect(defaultLoop.rollGain).toBe(2.0);
+
+        const customLoop = new GameLoop({ gameplayKenGroup: kenGroup, rollGain: 1.5 });
+        expect(customLoop.rollGain).toBe(1.5);
+      });
+
+      it('Hand input branch amplifies wrist twist angle by rollGain (30 deg twist -> 60 deg twist)', () => {
+        const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+        const loop = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: adapter,
+          rollGain: 2.0,
+        });
+
+        const q30 = {
+          x: 0,
+          y: 0,
+          z: Math.sin(Math.PI / 12),
+          w: Math.cos(Math.PI / 12),
+        };
+
+        loop.inputSystem.update(0.016, {
+          wrist: {
+            position: { x: 0.1, y: 1.25, z: -0.45 },
+            quaternion: q30,
+            valid: true,
+          },
+        });
+
+        expect(loop.lastRawTwistDeg).toBeCloseTo(30, 4);
+        expect(loop.lastAmplifiedTwistDeg).toBeCloseTo(60, 4);
+
+        const expected60 = {
+          z: Math.sin(Math.PI / 6),
+          w: Math.cos(Math.PI / 6),
+        };
+        expect(kenGroup.quaternion.x).toBeCloseTo(0, 5);
+        expect(kenGroup.quaternion.y).toBeCloseTo(0, 5);
+        expect(kenGroup.quaternion.z).toBeCloseTo(expected60.z, 5);
+        expect(kenGroup.quaternion.w).toBeCloseTo(expected60.w, 5);
+      });
+
+      it('FakeInput path is unchanged (bypasses wrist roll amplification)', () => {
+        const fakeInput = new FakeInput({ autoRoll: false });
+        fakeInput._rollAngle = Math.PI / 6; // 30 deg roll
+
+        const loopWithFake = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: fakeInput,
+          rollGain: 2.0,
+        });
+
+        loopWithFake.inputSystem.update(0.016);
+
+        // FakeInput quaternion copied directly without amplification (remains 30 deg, NOT amplified to 60 deg)
+        const expected30 = {
+          z: Math.sin(Math.PI / 12),
+          w: Math.cos(Math.PI / 12),
+        };
+        expect(kenGroup.quaternion.z).toBeCloseTo(expected30.z, 5);
+        expect(kenGroup.quaternion.w).toBeCloseTo(expected30.w, 5);
+      });
+
+      it('Tracking loss still freezes gameplayKenGroup and resets PoseFilter', () => {
+        const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+        const poseFilter = new PoseFilter();
+        const loop = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: adapter,
+          poseFilter,
+          rollGain: 2.0,
+        });
+
+        const q30 = {
+          x: 0,
+          y: 0,
+          z: Math.sin(Math.PI / 12),
+          w: Math.cos(Math.PI / 12),
+        };
+
+        // Frame 1: Valid tracking
+        loop.inputSystem.update(0.016, {
+          wrist: {
+            position: { x: 0.15, y: 1.25, z: -0.45 },
+            quaternion: q30,
+            valid: true,
+          },
+        });
+        expect(loop.isTrackingValid).toBe(true);
+        expect(poseFilter.isInitialized()).toBe(true);
+
+        const frozenX = kenGroup.position.x;
+        const frozenZ = kenGroup.quaternion.z;
+
+        // Frame 2: Tracking loss (null joints)
+        loop.inputSystem.update(0.016, null);
+        expect(loop.isTrackingValid).toBe(false);
+        expect(poseFilter.isInitialized()).toBe(false);
+
+        // Transform is frozen in place
+        expect(kenGroup.position.x).toBe(frozenX);
+        expect(kenGroup.quaternion.z).toBe(frozenZ);
       });
     });
   });

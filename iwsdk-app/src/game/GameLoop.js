@@ -38,6 +38,7 @@ import { KendamaInputAndDetector } from '../input/KendamaInputAndDetector.js';
 import { PoseFilter } from '../input/PoseFilter.js';
 import { extractWristJoint, extractPinchJoints } from '../input/XRHandJointExtractor.js';
 import { PinchDetector } from '../input/PinchDetector.js';
+import { DEFAULT_ROLL_GAIN, amplifyWristRoll } from '../input/wristRoll.js';
 
 export class GameLoop {
   /**
@@ -106,6 +107,9 @@ export class GameLoop {
     this._isTrackingValid = true;
     this.lastEvaluatedVelocity = null;
     this.lastEvaluatedBallPosition = null;
+    this.rollGain = options.rollGain !== undefined ? options.rollGain : DEFAULT_ROLL_GAIN;
+    this.lastRawTwistDeg = 0;
+    this.lastAmplifiedTwistDeg = 0;
 
     // WebXR context references for wrist joint extraction
     this.referenceSpace = options.referenceSpace || null;
@@ -303,6 +307,21 @@ export class GameLoop {
             if (typeof this.gameplayKenGroup.quaternion?.copy === 'function') {
               this.gameplayKenGroup.quaternion.copy(inputOutput.quaternion);
             }
+
+            // Apply 2x wrist-roll amplification to gameplayKenGroup (hand input only)
+            const rollDetails = {};
+            const amplifiedQuat = amplifyWristRoll(
+              this.gameplayKenGroup.quaternion,
+              this.rollGain,
+              rollDetails
+            );
+            if (typeof this.gameplayKenGroup.quaternion?.copy === 'function') {
+              this.gameplayKenGroup.quaternion.copy(amplifiedQuat);
+            } else {
+              this.gameplayKenGroup.quaternion = amplifiedQuat;
+            }
+            this.lastRawTwistDeg = rollDetails.rawTwistDeg ?? 0;
+            this.lastAmplifiedTwistDeg = rollDetails.amplifiedTwistDeg ?? 0;
           }
         }
       } else {

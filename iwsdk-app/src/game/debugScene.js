@@ -32,6 +32,7 @@ import { BoxGeometry, SphereGeometry, MeshBasicMaterial, Mesh } from 'three';
 import { BALL_RADIUS, getCupConfig } from '../input/cupConfigs.js';
 import { Events } from '../contracts/Interfaces.js';
 import { KendamaXRSystem } from './KendamaXRSystem.js';
+import { DEFAULT_ROLL_GAIN, decomposeSwingTwist } from '../input/wristRoll.js';
 
 /**
  * Pure math helper to rotate a 3D vector by a quaternion without external dependencies.
@@ -200,6 +201,25 @@ export function getTargetOverride() {
 }
 
 /**
+ * Resolves forced rollGain override from `?rollGain=N` URL query parameter.
+ * Active exclusively when debug mode is enabled and N is a finite number >= 0.
+ *
+ * @returns {number|null}
+ */
+export function getRollGainOverride() {
+  if (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('debug') && params.has('rollGain')) {
+      const val = parseFloat(params.get('rollGain'));
+      if (Number.isFinite(val) && val >= 0) {
+        return val;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Initializes debug visuals and diagnostic logging if debug mode is active.
  *
  * @param {Object} [options={}]
@@ -265,6 +285,14 @@ export function setupDebugScene(options = {}) {
     if (gameLoop.catchFlow && typeof gameLoop.catchFlow.resetSeatCup === 'function') {
       gameLoop.catchFlow.resetSeatCup(targetOverride, kenGroup);
     }
+  }
+
+  // 2. Force rollGain override if ?rollGain=N is specified (debug only)
+  const rollGainOverride = (options.rollGain !== undefined && Number.isFinite(options.rollGain) && options.rollGain >= 0)
+    ? options.rollGain
+    : getRollGainOverride();
+  if (rollGainOverride !== null && gameLoop) {
+    gameLoop.rollGain = rollGainOverride;
   }
 
   // Sync initial position if already available
@@ -365,13 +393,20 @@ export function setupDebugScene(options = {}) {
         return `${key}: ${d.toFixed(4)}m`;
       }).join(', ');
 
+      const rollGain = gameLoop?.rollGain ?? DEFAULT_ROLL_GAIN;
+      const kenQuat = kenGroup?.quaternion || { x: 0, y: 0, z: 0, w: 1 };
+      const twistInfo = decomposeSwingTwist(kenQuat);
+      const rawTwistDeg = gameLoop?.lastRawTwistDeg ?? ((twistInfo.theta * 180) / Math.PI);
+      const ampTwistDeg = gameLoop?.lastAmplifiedTwistDeg ?? ((twistInfo.theta * 180) / Math.PI);
+
       console.log(
         `[DEBUG Launch] flight: ${currentFlightId} | target: ${activeCup} | seatCup: ${seatCup} | ` +
         `ballPos: (${ballLaunchPos.x.toFixed(4)}, ${ballLaunchPos.y.toFixed(4)}, ${ballLaunchPos.z.toFixed(4)}) | ` +
         `cupPos: (${cupPose.position.x.toFixed(4)}, ${cupPose.position.y.toFixed(4)}, ${cupPose.position.z.toFixed(4)}) | ` +
         `cupNorm: (${cupPose.normal.x.toFixed(4)}, ${cupPose.normal.y.toFixed(4)}, ${cupPose.normal.z.toFixed(4)}) | ` +
         `kenRotDeg: (${kenRot.x.toFixed(2)}°, ${kenRot.y.toFixed(2)}°, ${kenRot.z.toFixed(2)}°) | ` +
-        `cupDists: (${cupDists})`
+        `cupDists: (${cupDists}) | ` +
+        `rollGain: ${rollGain.toFixed(2)} | twistDeg: (raw: ${rawTwistDeg.toFixed(2)}°, amp: ${ampTwistDeg.toFixed(2)}°)`
       );
     }
 
@@ -433,6 +468,27 @@ export function setupDebugScene(options = {}) {
         );
       };
 
+      const logBallPositionComparison = (tag) => {
+        const traj = gameLoop?.trajectory ?? trajectory;
+        const trajPos = traj
+          ? {
+              x: traj._position?.x ?? traj.state?.position?.x ?? 0.0,
+              y: traj._position?.y ?? traj.state?.position?.y ?? 0.0,
+              z: traj._position?.z ?? traj.state?.position?.z ?? 0.0,
+            }
+          : { x: 0.0, y: 0.0, z: 0.0 };
+        const trajStartY = traj?._startY ?? traj?.origin?.y ?? 0.0;
+        const flowBallPos = gameLoop?.catchFlow?.ballPosition ?? { x: 0.0, y: 0.0, z: 0.0 };
+        const evalBall = gameLoop?.lastEvaluatedBallPosition ?? ballState?.position ?? { x: 0.0, y: 0.0, z: 0.0 };
+
+        console.log(
+          `[DEBUG BallPosComp ${tag}] flight: ${activeFlightId ?? currentFlightId} | ` +
+          `trajPos: (${trajPos.x.toFixed(4)}, ${trajPos.y.toFixed(4)}, ${trajPos.z.toFixed(4)}) (startY: ${trajStartY.toFixed(4)}) | ` +
+          `catchFlowPos: (${flowBallPos.x.toFixed(4)}, ${flowBallPos.y.toFixed(4)}, ${flowBallPos.z.toFixed(4)}) | ` +
+          `evalBallPos: (${evalBall.x.toFixed(4)}, ${evalBall.y.toFixed(4)}, ${evalBall.z.toFixed(4)})`
+        );
+      };
+
       // Item 2: Log once per second while in air
       if (elapsed >= 1.0 && (lastAirOneSecondLogTime === 0.0 || (elapsed - lastAirOneSecondLogTime) >= 1.0)) {
         lastAirOneSecondLogTime = elapsed;
@@ -444,6 +500,7 @@ export function setupDebugScene(options = {}) {
         if (!loggedTicksForFlight.has(ticksRemaining)) {
           loggedTicksForFlight.add(ticksRemaining);
           logTargetEvaluation(`Tick -${ticksRemaining}`);
+          logBallPositionComparison(`Tick -${ticksRemaining}`);
         }
       }
     }
@@ -501,6 +558,26 @@ export function setupDebugScene(options = {}) {
         `vecWorld: (${vWorld.x.toFixed(4)}, ${vWorld.y.toFixed(4)}, ${vWorld.z.toFixed(4)}) | ` +
         `vecLocal: (${vLocal.x.toFixed(4)}, ${vLocal.y.toFixed(4)}, ${vLocal.z.toFixed(4)}) | ` +
         `dist: ${landingDist.toFixed(4)}m`
+      );
+
+      // Side-by-side position comparison on the final tick (Item 1)
+      const traj = gameLoop?.trajectory ?? trajectory;
+      const trajPos = traj
+        ? {
+            x: traj._position?.x ?? traj.state?.position?.x ?? 0.0,
+            y: traj._position?.y ?? traj.state?.position?.y ?? 0.0,
+            z: traj._position?.z ?? traj.state?.position?.z ?? 0.0,
+          }
+        : { x: 0.0, y: 0.0, z: 0.0 };
+      const trajStartY = traj?._startY ?? traj?.origin?.y ?? 0.0;
+      const flowBallPos = gameLoop?.catchFlow?.ballPosition ?? { x: 0.0, y: 0.0, z: 0.0 };
+      const evalBall = gameLoop?.lastEvaluatedBallPosition ?? ballState?.position ?? { x: 0.0, y: 0.0, z: 0.0 };
+
+      console.log(
+        `[DEBUG BallPosComp Final] flight: ${activeFlightId ?? currentFlightId} | ` +
+        `trajPos: (${trajPos.x.toFixed(4)}, ${trajPos.y.toFixed(4)}, ${trajPos.z.toFixed(4)}) (startY: ${trajStartY.toFixed(4)}) | ` +
+        `catchFlowPos: (${flowBallPos.x.toFixed(4)}, ${flowBallPos.y.toFixed(4)}, ${flowBallPos.z.toFixed(4)}) | ` +
+        `evalBallPos: (${evalBall.x.toFixed(4)}, ${evalBall.y.toFixed(4)}, ${evalBall.z.toFixed(4)})`
       );
 
       // Fix [DEBUG Closest] metric & dwell counters so they include the landing tick (Item 3)

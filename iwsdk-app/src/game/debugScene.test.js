@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as THREE from 'three';
-import { setupDebugScene, isDebugMode, getTargetOverride } from './debugScene.js';
+import { setupDebugScene, isDebugMode, getTargetOverride, getRollGainOverride } from './debugScene.js';
 import { CatchFlow, computeCupWorldSeatPoint } from './CatchFlow.js';
 import { BALL_RADIUS } from '../input/cupConfigs.js';
 import { EventBus } from '../contracts/EventBus.js';
@@ -455,6 +455,9 @@ describe('debugScene Module', () => {
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('[DEBUG TargetEval Tick -2] flight: 2 | cup: big | dist: 0.0750m (R_clean: 0.0400m, R_assist: 0.0600m) | dot: -0.150 (req < -0.2) | relSpeed: 0.950 m/s (max: none) | firstFail: out_of_range | confirmed: false, valid: false | confirmCount: 0/2')
     );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG BallPosComp Tick -2] flight: 2 | trajPos:')
+    );
 
     result.cleanup();
   });
@@ -787,9 +790,47 @@ describe('debugScene Module', () => {
       expect.stringContaining('[DEBUG FinalTickBallCup] flight: 7 | target: big | ballPos: (0.0607, 1.2500, -0.4500) | cupPos: (0.0607, 1.2500, -0.4500) | group: gameplayKenGroup (matrixWorldUpdated: yes)')
     );
 
+    // Verify [DEBUG BallPosComp Final] log
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG BallPosComp Final] flight: 7 | trajPos: (0.0000, 0.0000, 0.0000) (startY: 0.0000) | catchFlowPos:')
+    );
+
     // Verify [DEBUG Closest] captured landing tick (0.0100m at t=0.839s)
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('[DEBUG Closest] flight: 7 | target: big | minDistance: 0.0100m at t=0.839s')
+    );
+
+    result.cleanup();
+  });
+
+  it('19. setupDebugScene supports ?rollGain=N override and logs rollGain & twist angles in [DEBUG Launch]', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    mockKenGroup.position.set(0.0, 1.25, -0.45);
+    mockKenGroup.quaternion.set(0, 0, Math.sin(Math.PI / 12), Math.cos(Math.PI / 12)); // 30 deg twist
+    mockGameLoop.rollGain = 2.0;
+    mockGameLoop.lastRawTwistDeg = 30.0;
+    mockGameLoop.lastAmplifiedTwistDeg = 60.0;
+
+    const result = setupDebugScene({
+      world: mockWorld,
+      game: mockGame,
+      gameLoop: mockGameLoop,
+      debug: true,
+      rollGain: 3.5,
+    });
+
+    // Check that gameLoop.rollGain was overridden to 3.5
+    expect(mockGameLoop.rollGain).toBe(3.5);
+
+    // Trigger launch frame
+    result.onFrame({ position: { x: 0, y: 1.25, z: -0.45 }, mode: 'air' });
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG Launch] flight:')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('| rollGain: 3.50 | twistDeg: (raw: 30.00°, amp: 60.00°)')
     );
 
     result.cleanup();
