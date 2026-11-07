@@ -143,6 +143,9 @@ describe('debugScene Module', () => {
       debug: true,
     });
 
+    // Clear startup [DEBUG CupReq] log before testing logDebugStatus
+    consoleSpy.mockClear();
+
     // Initial log with no catches yet
     result.logDebugStatus();
     expect(consoleSpy).toHaveBeenCalledTimes(1);
@@ -831,6 +834,90 @@ describe('debugScene Module', () => {
     );
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('| rollGain: 3.50 | twistDeg: (raw: 30.00°, amp: 60.00°)')
+    );
+
+    result.cleanup();
+  });
+
+  it('20. setupDebugScene logs the last 3 ticks of a flight including landing tick with evaluateCatch status', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    mockKenGroup.position.set(0.0, 1.5, -0.45);
+    mockKenGroup.quaternion.set(0, 0, 0, 1);
+    mockGameLoop.lastDt = 0.0167;
+    mockGameLoop.lastTickEvaluatedCatch = true;
+    mockGameLoop.trajectory = {
+      flightId: 99,
+      elapsed: 0.8390,
+      flightDuration: 0.8390,
+      _position: { x: 0.0, y: 1.5, z: -0.45 },
+      _startY: 1.5,
+      isAirborne: false,
+    };
+
+    const result = setupDebugScene({
+      world: mockWorld,
+      game: mockGame,
+      gameLoop: mockGameLoop,
+      debug: true,
+      target: 'big',
+    });
+
+    // Launch
+    result.onFrame({ position: { x: 0, y: 1.5, z: -0.45 }, mode: 'air' });
+
+    // Tick -2
+    mockGameLoop.trajectory.elapsed = 0.8167;
+    mockGameLoop.trajectory._position.y = 1.5228;
+    mockGameLoop.trajectory.isAirborne = true;
+    result.onFrame({ position: { x: 0, y: 1.5228, z: -0.45 }, mode: 'air' });
+
+    // Tick -1
+    mockGameLoop.trajectory.elapsed = 0.8333;
+    mockGameLoop.trajectory._position.y = 1.5060;
+    mockGameLoop.trajectory.isAirborne = true;
+    result.onFrame({ position: { x: 0, y: 1.5060, z: -0.45 }, mode: 'air' });
+
+    // Final / Landing Tick
+    mockGameLoop.trajectory.elapsed = 0.8390;
+    mockGameLoop.trajectory._position.y = 1.5000;
+    mockGameLoop.trajectory.isAirborne = false;
+    result.onFrame({ position: { x: 0, y: 1.5000, z: -0.45 }, mode: 'seated' });
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG Last3Ticks Tick -2] flight: 99 | elapsed: 0.8167s | flightDuration: 0.8390s | trajPosY: 1.5228m | startY: 1.5000m | isAirborne: true | dt: 0.0167s | evaluateCatchRan: yes')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG Last3Ticks Tick -1] flight: 99 | elapsed: 0.8333s | flightDuration: 0.8390s | trajPosY: 1.5060m | startY: 1.5000m | isAirborne: true | dt: 0.0167s | evaluateCatchRan: yes')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG Last3Ticks Final] flight: 99 | elapsed: 0.8390s | flightDuration: 0.8390s | trajPosY: 1.5000m | startY: 1.5000m | isAirborne: false | dt: 0.0167s | evaluateCatchRan: yes')
+    );
+
+    result.cleanup();
+  });
+
+  it('21. setupDebugScene logs one-time [DEBUG CupReq] line at startup with local normals and thresholds', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const result = setupDebugScene({
+      world: mockWorld,
+      game: mockGame,
+      gameLoop: mockGameLoop,
+      debug: true,
+    });
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG CupReq] cup: big | localNorm: (1.0, 0.0, 0.0) | alignThresh: -0.2 (dot < -0.2) | orientThresh: <= 40.0° (dotUp >= 0.7660)')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG CupReq] cup: small | localNorm: (-1.0, 0.0, 0.0) | alignThresh: -0.2 (dot < -0.2) | orientThresh: <= 40.0° (dotUp >= 0.7660)')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG CupReq] cup: base | localNorm: (0.0, -1.0, 0.0) | alignThresh: -0.2 (dot < -0.2) | orientThresh: <= 40.0° (dotUp >= 0.7660)')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG CupReq] cup: spike | localNorm: (0.0, 1.0, 0.0) | alignThresh: -0.2 (dot < -0.2) | orientThresh: <= 18.0° (dotUp >= 0.9511)')
     );
 
     result.cleanup();

@@ -295,6 +295,22 @@ export function setupDebugScene(options = {}) {
     gameLoop.rollGain = rollGainOverride;
   }
 
+  // One-time [DEBUG CupReq] diagnostic log at startup for each cup (Item 1)
+  const cupReqKeys = ['big', 'small', 'base', 'spike'];
+  for (const key of cupReqKeys) {
+    const config = getCupConfig(key);
+    const norm = config?.localNormal ?? { x: 0, y: 0, z: 0 };
+    const maxDeg = config?.orientationThreshold?.maxAngleDeg ?? (key === 'spike' ? 18.0 : 40.0);
+    const minDot = config?.orientationThreshold?.minDotProduct ?? Math.cos(maxDeg * (Math.PI / 180));
+    console.log(
+      `[DEBUG CupReq] cup: ${key} | localNorm: (${norm.x.toFixed(1)}, ${norm.y.toFixed(1)}, ${norm.z.toFixed(1)}) | ` +
+      `alignThresh: -0.2 (dot < -0.2) | ` +
+      `orientThresh: <= ${maxDeg.toFixed(1)}° (dotUp >= ${minDot.toFixed(4)}) | ` +
+      `requiredWorldDir: (0, 1, 0)`
+    );
+  }
+
+
   // Sync initial position if already available
   const initialBallState = gameLoop?.getBallState?.() ?? game?.pipeline?.catchDetector?.getBallState?.();
   if (initialBallState?.position) {
@@ -339,6 +355,7 @@ export function setupDebugScene(options = {}) {
   let lastRecordedDt = 0.016;
   let lastAirOneSecondLogTime = -1.0;
   let loggedTicksForFlight = new Set();
+  let flightTickHistory = [];
   let prevBallMode = null;
 
   // Track compact debug logging interval and change detection (Item 1)
@@ -374,6 +391,7 @@ export function setupDebugScene(options = {}) {
       ticksInsideClean = 0;
       lastAirOneSecondLogTime = 0.0;
       loggedTicksForFlight = new Set();
+      flightTickHistory = [];
 
       // Item 3: Log target cup normal/position and Ken rotation at launch
       const cupPose = getCupWorldPose(activeCup, kenGroup);
@@ -408,6 +426,28 @@ export function setupDebugScene(options = {}) {
         `cupDists: (${cupDists}) | ` +
         `rollGain: ${rollGain.toFixed(2)} | twistDeg: (raw: ${rawTwistDeg.toFixed(2)}°, amp: ${ampTwistDeg.toFixed(2)}°)`
       );
+    }
+
+    // Record tick history for the flight (Item 10)
+    if (currentMode === 'air' || (prevBallMode === 'air' && currentMode !== 'air')) {
+      const traj = gameLoop?.trajectory ?? trajectory;
+      const trajPosY = traj?._position?.y ?? traj?.state?.position?.y ?? 0.0;
+      const startY = traj?._startY ?? traj?.origin?.y ?? 0.0;
+      const isAirborne = Boolean(traj?.isAirborne ?? traj?.state?.isAirborne);
+      const elapsedVal = traj?._elapsed ?? traj?.state?.elapsed ?? elapsed;
+      const durVal = traj?.flightDuration ?? traj?.state?.flightDuration ?? flightDuration;
+      const evalRan = Boolean(gameLoop?.lastTickEvaluatedCatch);
+
+      flightTickHistory.push({
+        flightId: activeFlightId ?? currentFlightId,
+        elapsed: elapsedVal,
+        flightDuration: durVal,
+        trajPosY,
+        startY,
+        isAirborne,
+        dt,
+        evaluateCatchRan: evalRan,
+      });
     }
 
     // While ball mode is 'air'
@@ -579,6 +619,23 @@ export function setupDebugScene(options = {}) {
         `catchFlowPos: (${flowBallPos.x.toFixed(4)}, ${flowBallPos.y.toFixed(4)}, ${flowBallPos.z.toFixed(4)}) | ` +
         `evalBallPos: (${evalBall.x.toFixed(4)}, ${evalBall.y.toFixed(4)}, ${evalBall.z.toFixed(4)})`
       );
+
+      // Log the last 3 ticks of the flight: elapsed, flightDuration, trajPosY, startY, isAirborne, dt, evaluateCatchRan
+      const last3 = flightTickHistory.slice(-3);
+      last3.forEach((tick, idx) => {
+        const offset = last3.length - 1 - idx;
+        const tag = offset === 0 ? 'Final' : `Tick -${offset}`;
+        console.log(
+          `[DEBUG Last3Ticks ${tag}] flight: ${tick.flightId} | ` +
+          `elapsed: ${tick.elapsed.toFixed(4)}s | ` +
+          `flightDuration: ${tick.flightDuration.toFixed(4)}s | ` +
+          `trajPosY: ${tick.trajPosY.toFixed(4)}m | ` +
+          `startY: ${tick.startY.toFixed(4)}m | ` +
+          `isAirborne: ${tick.isAirborne} | ` +
+          `dt: ${tick.dt.toFixed(4)}s | ` +
+          `evaluateCatchRan: ${tick.evaluateCatchRan ? 'yes' : 'no'}`
+        );
+      });
 
       // Fix [DEBUG Closest] metric & dwell counters so they include the landing tick (Item 3)
       if (Number.isFinite(landingDist)) {

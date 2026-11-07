@@ -107,6 +107,7 @@ export class GameLoop {
     this._isTrackingValid = true;
     this.lastEvaluatedVelocity = null;
     this.lastEvaluatedBallPosition = null;
+    this.lastTickEvaluatedCatch = false;
     this.rollGain = options.rollGain !== undefined ? options.rollGain : DEFAULT_ROLL_GAIN;
     this.lastRawTwistDeg = 0;
     this.lastAmplifiedTwistDeg = 0;
@@ -379,6 +380,7 @@ export class GameLoop {
     this.trajectoryUpdateCount++;
     this.trajectory.update(dt);
     this.lastDt = dt;
+    this.lastTickEvaluatedCatch = false;
 
     // 2. Advance catch flow state machine
     // Defer expiration check so catch evaluation (step 3) runs on the final tick first
@@ -408,6 +410,7 @@ export class GameLoop {
         dt
       );
       this.lastCatchEvaluation = evalRes;
+      this.lastTickEvaluatedCatch = true;
 
       // Process catch only when BOTH evalRes.confirmed and evalRes.valid are true
       if (evalRes && evalRes.confirmed && evalRes.valid) {
@@ -512,6 +515,7 @@ export class GameLoop {
     const launchPos = this.catchFlow.ballPosition;
     this.trajectory.launch(launchPos);
     this.catchFlow.onLaunch(this.trajectory.flightId);
+    this.lastTickEvaluatedCatch = false;
     this.lastLaunchInfo = {
       source,
       position: { x: launchPos.x, y: launchPos.y, z: launchPos.z },
