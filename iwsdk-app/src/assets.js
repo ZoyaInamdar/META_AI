@@ -51,4 +51,5 @@ export default defineAssets({
     'label-grab': uikitml('label-grab.uikitml', 'Grab Label'),
     'label-select': uikitml('label-select.uikitml', 'Select Label'),
     'label-spin': uikitml('label-spin.uikitml', 'Spin Label'),
+    'preset-selector': uikitml('preset-selector.uikitml', 'Preset Selector'),
 });

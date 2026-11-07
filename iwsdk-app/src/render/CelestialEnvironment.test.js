@@ -28,6 +28,8 @@ import {
     CelestialEnvironmentSystem,
 } from './CelestialEnvironment.js';
 import { DomeGradient, IBLGradient, LevelRoot } from '@iwsdk/core';
+import { eventBus } from '../contracts/EventBus.js';
+import { Events, BallState, PlanetState, BallMode } from '../contracts/Interfaces.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -646,6 +648,220 @@ describe('CelestialEnvironment - Phase 1 Pastel Galaxy Foundation', () => {
 
             // cleanupFuncs should have at most 2 callbacks (one for cupPreview, one for selectPlinth)
             assert.ok(system.cleanupFuncs.length <= 2, `cleanupFuncs has ${system.cleanupFuncs.length} entries, should not grow indefinitely`);
+
+            system.destroy();
+        });
+
+        it('H. PlanetoidRenderer Production Integration & Debug Controls', () => {
+            const mockRoot = createMockLevelRootEntity(SHOWROOM_ENVIRONMENT_CONFIG);
+            const sceneGroup = new Group();
+            const mockWorld = {
+                activeLevel: { value: mockRoot },
+                scene: sceneGroup,
+            };
+
+            const system = new CelestialEnvironmentSystem(mockWorld);
+            system.init();
+
+            // 1. Initial State & Debug Hooks
+            assert.ok(system.planetoidRenderer, 'PlanetoidRenderer must be instantiated on init');
+            assert.equal(system.getPlanetoidRenderer(), system.planetoidRenderer);
+            assert.equal(globalThis.planetoidRenderer, system.planetoidRenderer);
+            assert.ok(globalThis.__CELESTIAL_PLANETOID_DEBUG__, '__CELESTIAL_PLANETOID_DEBUG__ must be exposed on window');
+            assert.equal(Math.round(globalThis.__CELESTIAL_PLANETOID_DEBUG__.getScale() * 100) / 100, 17.0);
+            assert.equal(Math.round(globalThis.__CELESTIAL_PLANETOID_DEBUG__.getAnchor().z * 100) / 100, -1.80);
+
+            // 2. Mode Switching: gameplay activates, showroom hides
+            system.setMode('gameplay');
+            assert.equal(system.planetoidRenderer.group.visible, true, 'Planetoid must be visible in gameplay mode');
+
+            // Ensure zero duplicate planetoids across repeated toggles
+            system.setMode('gameplay');
+            system.setMode('gameplay');
+            const landmarks = system.getLandmarksGroup();
+            assert.equal(landmarks.children.filter((c) => c.name === 'planetoid-renderer-root').length, 1, 'Exactly one planetoid root');
+
+            system.setMode('showroom');
+            assert.equal(system.planetoidRenderer.group.visible, false, 'Planetoid must be hidden in showroom mode');
+
+            // 3. Debug Stage Overrides (Stages 1..5) without mutating live state
+            const debugHook = globalThis.__CELESTIAL_PLANETOID_DEBUG__;
+            assert.equal(typeof debugHook.playAwakening, 'function');
+            assert.equal(typeof debugHook.resetAwakening, 'function');
+            assert.equal(typeof debugHook.getAwakeningProgress, 'function');
+            assert.equal(typeof debugHook.getAwakeningPhase, 'function');
+
+            assert.equal(debugHook.setStage(1), true);
+            assert.equal(system.planetoidRenderer.isDebugMode(), true);
+            assert.equal(system.planetoidRenderer.group.visible, true);
+            assert.equal(system.planetoidRenderer.coreMaterial.uniforms.uKintsugiGlow.value, 0.0);
+
+            // Verify awakening controls exposed on debugHook
+            debugHook.playAwakening(4.0);
+            assert.equal(system.planetoidRenderer.isAwakeningPlaying, true);
+            assert.equal(typeof debugHook.getAwakeningProgress(), 'number');
+            assert.equal(debugHook.getAwakeningPhase(), 'first_awakening');
+
+            system.update(1.0); // 1.0s / 4.0s = 0.25 progress
+            assert.ok(debugHook.getAwakeningProgress() >= 0.20 && debugHook.getAwakeningProgress() <= 0.30);
+            assert.equal(debugHook.getAwakeningPhase(), 'golden_propagation');
+
+            debugHook.resetAwakening();
+            assert.equal(debugHook.getAwakeningProgress(), 0.0);
+            assert.equal(debugHook.getAwakeningPhase(), 'dormant');
+            assert.equal(system.planetoidRenderer.isAwakeningPlaying, false);
+
+            assert.equal(debugHook.setStage(2), true);
+            assert.equal(Math.round(system.planetoidRenderer.coreMaterial.uniforms.uKintsugiGlow.value * 100) / 100, 0.85);
+
+            assert.equal(debugHook.setStage(3), true);
+            assert.equal(Math.round(system.planetoidRenderer.coreMaterial.uniforms.uOceanFill.value * 100) / 100, 0.85);
+
+            assert.equal(debugHook.setStage(4), true);
+            assert.equal(Math.round(system.planetoidRenderer.coreMaterial.uniforms.uAtmosphereDensity.value * 100) / 100, 0.90);
+
+            assert.equal(debugHook.setStage(5), true);
+            assert.equal(system.planetoidRenderer.ringMesh.visible, true);
+            assert.equal(system.planetoidRenderer.coreMaterial.uniforms.uGoldIgnited.value, 1.0);
+
+            debugHook.clear();
+            assert.equal(system.planetoidRenderer.isDebugMode(), false);
+            assert.equal(system.planetoidRenderer.group.visible, false); // Hides again when debug cleared in showroom
+
+            // 4. Live BallState and PlanetState Event Transmission via EventBus
+            system.setMode('gameplay');
+            const liveBall = new BallState({ x: 0.05, y: 1.28, z: -0.42 }, { x: 0, y: 0, z: 0 }, BallMode.SEATED);
+            const livePlanet = new PlanetState({ kintsugiGlow: 0.77, atmosphereDensity: 0.33 });
+
+            eventBus.emit(Events.BALL, liveBall);
+            eventBus.emit(Events.PLANET, livePlanet);
+
+            assert.equal(system.lastBallState, liveBall);
+            assert.equal(system.lastPlanetState, livePlanet);
+
+            system.update(0.016);
+            // Planetoid maintains its celestial gameplay anchor rather than copying physical BallState position
+            assert.equal(Math.round(system.planetoidRenderer.group.position.x * 100) / 100, 0.0);
+            assert.equal(Math.round(system.planetoidRenderer.group.position.y * 100) / 100, 1.48);
+            assert.equal(Math.round(system.planetoidRenderer.group.position.z * 100) / 100, -1.80);
+            // Hero scale for dominant central celestial focal body (~1.19m diameter)
+            assert.equal(Math.round(system.planetoidRenderer.group.scale.x * 100) / 100, 17.0);
+            assert.equal(Math.round(system.planetoidRenderer.coreMaterial.uniforms.uKintsugiGlow.value * 100) / 100, 0.77);
+
+            // 5. Clean Disposal
+            system.destroy();
+            assert.equal(system.planetoidRenderer, null, 'PlanetoidRenderer reference nulled on destroy()');
+        });
+
+        it('I. Planet Showcase Mode (Visual Development Integration)', () => {
+            const mockRoot = createMockLevelRootEntity(SHOWROOM_ENVIRONMENT_CONFIG);
+            const sceneGroup = new Group();
+
+            // Set up showroom furniture
+            const studioFloor = new Mesh(); studioFloor.name = 'studio-floor'; studioFloor.visible = true;
+            sceneGroup.add(studioFloor);
+
+            // Set up Kendama hierarchy
+            const selectPlinth = new Group(); selectPlinth.name = 'select-plinth'; selectPlinth.visible = true;
+            const cupPreview = new Group(); cupPreview.name = 'cup-preview'; cupPreview.visible = true;
+            const centerKendama = new Group(); centerKendama.name = 'big-cup-three-quarter'; centerKendama.visible = true;
+            const tamaMesh = new Mesh(); tamaMesh.name = 'celestial-tama'; tamaMesh.visible = true;
+
+            cupPreview.add(centerKendama);
+            cupPreview.add(tamaMesh);
+            selectPlinth.add(cupPreview);
+            sceneGroup.add(selectPlinth);
+
+            const mockWorld = {
+                activeLevel: { value: mockRoot },
+                scene: sceneGroup,
+            };
+
+            const system = new CelestialEnvironmentSystem(mockWorld);
+            system.init();
+
+            // 1. Enter Showcase Mode
+            assert.equal(system.setMode('planet-showcase'), true);
+            assert.equal(system.getMode(), 'planet-showcase');
+            assert.equal(system.isPlanetShowcaseMode(), true);
+
+            // Planetoid in showcase configuration:
+            assert.equal(system.planetoidRenderer.isShowcaseMode(), true);
+            assert.equal(system.planetoidRenderer.getScale(), 30.0);
+            assert.equal(system.planetoidRenderer.group.visible, true);
+
+            // Showroom nodes hidden
+            assert.equal(studioFloor.visible, false, 'Showroom floor must be hidden');
+
+            // Kendama preview and presentation nodes hidden
+            assert.equal(selectPlinth.visible, false, 'select-plinth must be hidden in showcase mode');
+            assert.equal(cupPreview.visible, false, 'cup-preview must be hidden in showcase mode');
+            assert.equal(centerKendama.visible, false, 'active kendama must be hidden in showcase mode');
+            assert.equal(tamaMesh.visible, false, 'tama must be hidden in showcase mode');
+
+            // Background components remain visible
+            assert.equal(system.getNebulaMesh().visible, true, 'Nebula must remain visible');
+            assert.equal(system.getStarfieldMesh().visible, true, 'Starfield must remain visible');
+            assert.equal(system.getStardustMesh().visible, true, 'Stardust must remain visible');
+            assert.equal(system.getLandmarksGroup().visible, true, 'Landmarks must remain visible');
+            assert.equal(system.getCelestialBelt().visible, true, 'Golden belt must remain visible');
+
+            // 2. Late-loaded Kendama elements during showcase mode are also hidden
+            const lateInspectionCup = new Group();
+            lateInspectionCup.name = 'big-cup-profile-view';
+            lateInspectionCup.visible = true;
+            cupPreview.add(lateInspectionCup);
+            cupPreview.dispatchEvent({ type: 'childadded', child: lateInspectionCup });
+            assert.equal(lateInspectionCup.visible, false, 'Late added preview view must be hidden in showcase');
+
+            // 3. Return to Gameplay Mode
+            assert.equal(system.setMode('gameplay'), true);
+            assert.equal(system.getMode(), 'gameplay');
+            assert.equal(system.isPlanetShowcaseMode(), false);
+
+            // Planetoid restored to gameplay hero scale and anchor
+            assert.equal(system.planetoidRenderer.isShowcaseMode(), false);
+            assert.equal(system.planetoidRenderer.getScale(), 17.0);
+            const restoredAnchor = system.planetoidRenderer.getAnchorPosition();
+            assert.equal(Math.round(restoredAnchor.x * 100) / 100, 0.0);
+            assert.equal(Math.round(restoredAnchor.y * 100) / 100, 1.48);
+            assert.equal(Math.round(restoredAnchor.z * 100) / 100, -1.80);
+
+            // Kendama components restored
+            assert.equal(selectPlinth.visible, true, 'select-plinth restored in gameplay');
+            assert.equal(cupPreview.visible, true, 'cup-preview restored in gameplay');
+            assert.equal(centerKendama.visible, true, 'active kendama restored in gameplay');
+            assert.equal(tamaMesh.visible, true, 'celestial tama restored in gameplay');
+
+            // 4. Helper API Methods
+            system.setPlanetShowcaseMode(true);
+            assert.equal(system.isPlanetShowcaseMode(), true);
+            assert.equal(system.getMode(), 'planet-showcase');
+            assert.equal(system.planetoidRenderer.getScale(), 30.0);
+
+            // toggleMode returns back to gameplay from showcase
+            system.toggleMode();
+            assert.equal(system.getMode(), 'gameplay');
+            assert.equal(system.isPlanetShowcaseMode(), false);
+            assert.equal(system.planetoidRenderer.getScale(), 17.0);
+
+            // setPlanetShowcaseMode(false) keeps or restores to gameplay
+            system.setPlanetShowcaseMode(true);
+            assert.equal(system.getMode(), 'planet-showcase');
+            system.setPlanetShowcaseMode(false);
+            assert.equal(system.getMode(), 'gameplay');
+
+            // 5. PlanetEvolutionController Integration
+            assert.ok(system.evolutionController, 'evolutionController must be instantiated');
+            assert.equal(system.evolutionController.getCurrentStage(), 1);
+            assert.equal(system.evolutionController.getTargetStage(), 2);
+            assert.equal(system.evolutionController.getState(), 'playing');
+            assert.equal(system.evolutionController.planetoidRenderer, system.planetoidRenderer);
+
+            const globalScope = typeof window !== 'undefined' ? window : globalThis;
+            assert.ok(globalScope.celestialEvolution, 'window.celestialEvolution must be exposed');
+            assert.equal(globalScope.celestialEvolution, system.evolutionController);
+            assert.equal(typeof globalScope.__CELESTIAL_PLANETOID_DEBUG__.setVisualStage, 'function');
 
             system.destroy();
         });

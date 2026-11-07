@@ -193,7 +193,7 @@ describe('TamaGeometry Module', () => {
             }
             assert.ok(topPoleFound, 'Top pole at (0, BALL_RADIUS, 0) must exist');
 
-            // Equatorial vertices have y ≈ 0 and radial distance ≈ BALL_RADIUS
+            // Equatorial vertices have y â‰ˆ 0 and radial distance â‰ˆ BALL_RADIUS
             let equatorSamples = 0;
             for (let i = 0; i < pos.count; i++) {
                 const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);

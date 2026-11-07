@@ -90,7 +90,7 @@ describe('KenGeometry Module (Authoritative Integration)', () => {
 
             // Cups
             const big = cupConfigs.big ?? CUP_CONFIGS.big;
-            assert.ok(Math.abs(big.rimRadius - 0.045) < 1e-6);
+            assert.ok(Math.abs(big.rimRadius - 0.033) < 1e-6);
             assert.ok(Math.abs(big.depth - 0.018) < 1e-6);
             assert.ok(Math.abs(big.localPos.x - 0.06075) < 1e-6);
             assert.equal(big.localPos.y, 0.0);
@@ -100,7 +100,7 @@ describe('KenGeometry Module (Authoritative Integration)', () => {
             assert.equal(big.localNormal.z, 0.0);
 
             const small = cupConfigs.small ?? CUP_CONFIGS.small;
-            assert.ok(Math.abs(small.rimRadius - 0.040) < 1e-6);
+            assert.ok(Math.abs(small.rimRadius - 0.0255) < 1e-6);
             assert.ok(Math.abs(small.depth - 0.015) < 1e-6);
             assert.ok(Math.abs(small.localPos.x - (-0.06075)) < 1e-6);
             assert.equal(small.localPos.y, 0.0);
@@ -110,7 +110,7 @@ describe('KenGeometry Module (Authoritative Integration)', () => {
             assert.equal(small.localNormal.z, 0.0);
 
             const base = cupConfigs.base ?? CUP_CONFIGS.base;
-            assert.ok(Math.abs(base.rimRadius - 0.042) < 1e-6);
+            assert.ok(Math.abs(base.rimRadius - 0.02625) < 1e-6);
             assert.ok(Math.abs(base.depth - 0.012) < 1e-6);
             assert.equal(base.localPos.x, 0.0);
             assert.ok(Math.abs(base.localPos.y - (-0.180)) < 1e-6);
@@ -141,7 +141,7 @@ describe('KenGeometry Module (Authoritative Integration)', () => {
         it('generates a valid LatheGeometry using Person A Big Cup config', () => {
             const bigCupConfig = cupConfigs.big ?? CUP_CONFIGS.big;
             assert.ok(bigCupConfig, 'Big Cup configuration must exist');
-            assert.ok(Math.abs(bigCupConfig.rimRadius - 0.045) < 1e-6);
+            assert.ok(Math.abs(bigCupConfig.rimRadius - 0.033) < 1e-6);
             assert.ok(Math.abs(bigCupConfig.depth - 0.018) < 1e-6);
 
             const geometry = createCupGeometry(bigCupConfig);
@@ -792,8 +792,8 @@ describe('KenGeometry Module (Authoritative Integration)', () => {
             assert.ok(Math.abs(box.max.x - DEFAULT_CROSSBAR_HALF_WIDTH) < 1e-4);
             assert.ok(Math.abs(sizeX - DEFAULT_CROSSBAR_SPAN) < 1e-4);
 
-            // Maximum diameter in Y and Z reflects Small Cup end radius (0.040 * 2 = 0.080 m)
-            const expectedMaxDiameter = DEFAULT_CROSSBAR_SMALL_END_RADIUS * 2;
+            // Maximum diameter in Y and Z reflects Big Cup end radius (0.033 * 2 = 0.066 m)
+            const expectedMaxDiameter = DEFAULT_CROSSBAR_BIG_END_RADIUS * 2;
             assert.ok(Math.abs(sizeY - expectedMaxDiameter) < 1e-4);
             assert.ok(Math.abs(sizeZ - expectedMaxDiameter) < 1e-4);
 
@@ -1097,7 +1097,7 @@ describe('KenGeometry Module (Authoritative Integration)', () => {
         it('generates a valid LatheGeometry using Person A Base Cup config', () => {
             const baseCupConfig = cupConfigs.base ?? CUP_CONFIGS.base;
             assert.ok(baseCupConfig, 'Base Cup configuration must exist');
-            assert.ok(Math.abs(baseCupConfig.rimRadius - 0.042) < 1e-6);
+            assert.ok(Math.abs(baseCupConfig.rimRadius - 0.02625) < 1e-6);
             assert.ok(Math.abs(baseCupConfig.depth - 0.012) < 1e-6);
 
             const geometry = createCupGeometry(baseCupConfig);

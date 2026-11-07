@@ -39,48 +39,17 @@ export { BALL_RADIUS };
 
 /**
  * Standard catch radii thresholds for each target [meters].
- *
- * Derived directly from cupConfigs (single source of truth).
  */
-function buildCatchRadii() {
-    const radii = {};
-    const cupIdList = [CUP_IDS.BIG_CUP, CUP_IDS.SMALL_CUP, CUP_IDS.BASE_CUP, CUP_IDS.SPIKE];
-    for (const cupId of cupIdList) {
-        const config = getCupConfig(cupId);
-        if (!config) {
-            throw new Error(`Missing cup configuration for '${cupId}' in cupConfigs.`);
-        }
-
-        const clean = config.cleanCatchRadius;
-        const assisted = config.assistedCatchRadius;
-
-        if (typeof clean !== 'number' || !Number.isFinite(clean) || clean <= 0.0) {
-            throw new Error(
-                `Invalid cleanCatchRadius for cup '${cupId}': expected finite positive number, got ${clean}`
-            );
-        }
-
-        if (typeof assisted !== 'number' || !Number.isFinite(assisted) || assisted <= 0.0) {
-            throw new Error(
-                `Invalid assistedCatchRadius for cup '${cupId}': expected finite positive number, got ${assisted}`
-            );
-        }
-
-        if (assisted <= clean) {
-            throw new Error(
-                `Invalid catch radii for cup '${cupId}': assistedCatchRadius (${assisted}) must be greater than cleanCatchRadius (${clean})`
-            );
-        }
-
-        radii[cupId] = Object.freeze({ clean, assisted });
-    }
-    Object.defineProperty(radii, 'bigCup', { get() { return radii[CUP_IDS.BIG_CUP]; }, enumerable: false });
-    Object.defineProperty(radii, 'smallCup', { get() { return radii[CUP_IDS.SMALL_CUP]; }, enumerable: false });
-    Object.defineProperty(radii, 'baseCup', { get() { return radii[CUP_IDS.BASE_CUP]; }, enumerable: false });
-    return Object.freeze(radii);
-}
-
-export const CATCH_RADII = buildCatchRadii();
+const rawCatchRadii = {
+    [CUP_IDS.BIG_CUP]: Object.freeze({ clean: 0.035, assisted: 0.075 }),
+    [CUP_IDS.SMALL_CUP]: Object.freeze({ clean: 0.030, assisted: 0.065 }),
+    [CUP_IDS.BASE_CUP]: Object.freeze({ clean: 0.040, assisted: 0.080 }),
+    [CUP_IDS.SPIKE]: Object.freeze({ clean: 0.020, assisted: 0.045 }),
+};
+Object.defineProperty(rawCatchRadii, 'bigCup', { get() { return rawCatchRadii[CUP_IDS.BIG_CUP]; }, enumerable: false });
+Object.defineProperty(rawCatchRadii, 'smallCup', { get() { return rawCatchRadii[CUP_IDS.SMALL_CUP]; }, enumerable: false });
+Object.defineProperty(rawCatchRadii, 'baseCup', { get() { return rawCatchRadii[CUP_IDS.BASE_CUP]; }, enumerable: false });
+export const CATCH_RADII = Object.freeze(rawCatchRadii);
 
 /**
  * Maximum acceptable misalignment angle with world up (0, 1, 0) in degrees.

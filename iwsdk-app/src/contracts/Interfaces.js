@@ -34,7 +34,10 @@ export const Events = Object.freeze({
   PHYSICS: 'physics', // Emitted by Person B on N-body orbital step
   PLANET: 'planet',   // Emitted by Person B on planetary evolution state change
   BURN_START: 'burn_start', // Emitted by Person B on capture burn initiation
-  BURN_END: 'burn_end'      // Emitted by Person B on capture burn completion
+  BURN_END: 'burn_end',     // Emitted by Person B on capture burn completion
+  EVOLUTION_PROGRESS: 'planet:evolution-progress', // Emitted on planet evolution progression update
+  STAGE_READY: 'planet:stage-ready',               // Emitted when stage evolution reaches 100% (ready to transform)
+  STAGE_COMPLETED: 'planet:stage-completed'        // Emitted when stage transformation commits
 });
 
 /**

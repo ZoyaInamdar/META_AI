@@ -23,6 +23,17 @@ import { createCelestialStarfield } from './CelestialStarfield.js';
 import { createCelestialStardust } from './CelestialStardust.js';
 import { createCelestialLandmarks, disposeCelestialLandmarks } from './CelestialLandmarks.js';
 import { createCelestialBelt, updateCelestialBelt, disposeCelestialBelt } from './CelestialBelt.js';
+import {
+    PlanetoidRenderer,
+    PLANETOID_DEFAULT_SCALE,
+    PLANETOID_DEFAULT_ANCHOR,
+    PLANETOID_SHOWCASE_SCALE,
+    PLANETOID_SHOWCASE_ANCHOR,
+} from './PlanetoidRenderer.js';
+import { PlanetEvolutionController } from '../gameplay/PlanetEvolutionController.js';
+import { Vector3 } from 'three';
+import { eventBus as defaultEventBus } from '../contracts/EventBus.js';
+import { Events, BallState, PlanetState, BallMode } from '../contracts/Interfaces.js';
 
 /**
  * Converts a hex color string ('#RRGGBB' or 'RRGGBB') to normalized RGBA float array [r, g, b, a].
@@ -250,7 +261,7 @@ export const KENDAMA_ACTIVE_MODEL_TO_KEEP = Object.freeze([
 export class CelestialEnvironmentSystem extends createSystem({
     levelRoots: { required: [LevelRoot] },
 }) {
-    /** @type {'showroom' | 'gameplay'} */
+    /** @type {'showroom' | 'gameplay' | 'planet-showcase'} */
     mode = 'showroom';
 
     /** @type {any} */
@@ -290,6 +301,24 @@ export class CelestialEnvironmentSystem extends createSystem({
     /** @type {any} */
     wiredSelectPlinthNode = null;
 
+    /** @type {PlanetoidRenderer | null} */
+    planetoidRenderer = null;
+
+    /** @type {BallState | null} */
+    lastBallState = null;
+
+    /** @type {PlanetState | null} */
+    lastPlanetState = null;
+
+    /** @type {Vector3 | null} */
+    _scratchSeatedPos = null;
+
+    /** @type {BallState | null} */
+    _defaultSeatedBallState = null;
+
+    /** @type {PlanetState | null} */
+    _defaultPlanetState = null;
+
     init() {
         this.mode = 'showroom';
         this.activeConfig = SHOWROOM_ENVIRONMENT_CONFIG;
@@ -304,6 +333,29 @@ export class CelestialEnvironmentSystem extends createSystem({
         this.kendamaOriginalTransform = null;
         this.wiredCupPreviewNode = null;
         this.wiredSelectPlinthNode = null;
+        this.planetoidRenderer = null;
+        this.evolutionController = null;
+        this.lastBallState = null;
+        this.lastPlanetState = null;
+        this._scratchSeatedPos = new Vector3();
+        this._defaultSeatedBallState = null;
+        this._defaultPlanetState = null;
+        this.eventUnsubs = [];
+
+        // Subscribe to live EventBus for BallState & PlanetState events
+        if (defaultEventBus && typeof defaultEventBus.on === 'function') {
+            const unsubBall = defaultEventBus.on(Events.BALL, (state) => {
+                this.lastBallState = state;
+            });
+            const unsubPlanet = defaultEventBus.on(Events.PLANET, (state) => {
+                this.lastPlanetState = state;
+            });
+            if (typeof unsubBall === 'function') this.eventUnsubs.push(unsubBall);
+            if (typeof unsubPlanet === 'function') this.eventUnsubs.push(unsubPlanet);
+        }
+
+        // Eagerly instantiate PlanetoidRenderer so debug hooks & references are live immediately
+        this.ensurePlanetoidRenderer();
     }
 
     /**
@@ -546,6 +598,199 @@ export class CelestialEnvironmentSystem extends createSystem({
     }
 
     /**
+     * Ensures the procedural PlanetoidRenderer instance is created and attached to the Three.js scene.
+     * Reuses existing instance across showroom/gameplay transitions to prevent duplicate meshes.
+     * Attaches to landmarksGroup so it shares the celestial structures hierarchy
+     * and preserves the 4 top-level scene objects in sceneGroup.
+     * @returns {PlanetoidRenderer}
+     */
+    ensurePlanetoidRenderer() {
+        if (!this.planetoidRenderer) {
+            this.planetoidRenderer = new PlanetoidRenderer({
+                radius: 0.035,
+                scale: PLANETOID_DEFAULT_SCALE
+            });
+            if (this.planetoidRenderer.group) {
+                this.planetoidRenderer.group.visible = (this.mode === 'gameplay' || this.mode === 'planet-showcase') || this.planetoidRenderer.isDebugMode();
+            }
+            if (!this.evolutionController) {
+                this.evolutionController = new PlanetEvolutionController({
+                    planetoidRenderer: this.planetoidRenderer,
+                    eventBus: defaultEventBus
+                });
+            } else if (!this.evolutionController.planetoidRenderer) {
+                this.evolutionController.setPlanetoidRenderer(this.planetoidRenderer);
+            }
+            const globalScope = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
+            if (globalScope) {
+                globalScope.planetoidRenderer = this.planetoidRenderer;
+                globalScope.celestialEvolution = this.evolutionController;
+                globalScope.__CELESTIAL_PLANETOID_DEBUG__ = {
+                    setStage: (s) => {
+                        const res = this.planetoidRenderer?.setDebugStage(s);
+                        const landmarks = this.ensureLandmarksGroup();
+                        if (landmarks && this.planetoidRenderer?.group?.parent !== landmarks) {
+                            landmarks.add(this.planetoidRenderer.group);
+                        }
+                        if (landmarks) {
+                            landmarks.visible = true;
+                        }
+                        if (this.planetoidRenderer?.group) {
+                            this.planetoidRenderer.group.visible = true;
+                        }
+                        return res;
+                    },
+                    transitionToStage: (s) => {
+                        const res = this.planetoidRenderer?.transitionToStage(s);
+                        const landmarks = this.ensureLandmarksGroup();
+                        if (landmarks && this.planetoidRenderer?.group?.parent !== landmarks) {
+                            landmarks.add(this.planetoidRenderer.group);
+                        }
+                        if (landmarks) {
+                            landmarks.visible = true;
+                        }
+                        if (this.planetoidRenderer?.group) {
+                            this.planetoidRenderer.group.visible = true;
+                        }
+                        return res;
+                    },
+                    clear: () => {
+                        this.planetoidRenderer?.clearDebugStage();
+                        if (this.mode !== 'gameplay' && this.mode !== 'planet-showcase') {
+                            if (this.planetoidRenderer?.group) {
+                                this.planetoidRenderer.group.visible = false;
+                            }
+                            if (this.landmarksGroup) {
+                                this.landmarksGroup.visible = false;
+                            }
+                        }
+                    },
+                    getStage: () => this.planetoidRenderer?.getDebugStage(),
+                    getTargetStage: () => this.planetoidRenderer?.getTargetStage(),
+                    getVisualStage: () => this.planetoidRenderer?.getVisualStage(),
+                    setVisualStage: (s) => this.planetoidRenderer?.setVisualStage(s),
+                    playAwakening: (duration = 1.85) => {
+                        const res = this.planetoidRenderer?.playAwakening(duration);
+                        const landmarks = this.ensureLandmarksGroup();
+                        if (landmarks && this.planetoidRenderer?.group?.parent !== landmarks) {
+                            landmarks.add(this.planetoidRenderer.group);
+                        }
+                        if (landmarks) {
+                            landmarks.visible = true;
+                        }
+                        if (this.planetoidRenderer?.group) {
+                            this.planetoidRenderer.group.visible = true;
+                        }
+                        return res;
+                    },
+                    resetAwakening: () => this.planetoidRenderer?.resetAwakening(),
+                    getAwakeningProgress: () => this.planetoidRenderer?.getAwakeningProgress(),
+                    getAwakeningPhase: () => this.planetoidRenderer?.getAwakeningPhase(),
+                    setAnchor: (x, y, z) => this.planetoidRenderer?.setAnchorPosition(x, y, z),
+                    getAnchor: () => this.planetoidRenderer?.getAnchorPosition(),
+                    setScale: (s) => this.planetoidRenderer?.setScale(s),
+                    getScale: () => this.planetoidRenderer?.getScale(),
+                    setShowcaseMode: (m) => this.setPlanetShowcaseMode(m),
+                    isShowcaseMode: () => this.isPlanetShowcaseMode(),
+                    getShowcaseScale: () => this.planetoidRenderer?.getShowcaseScale(),
+                    getShowcaseAnchor: () => this.planetoidRenderer?.getShowcaseAnchor(),
+                    getGameplayScale: () => this.planetoidRenderer?.getGameplayScale(),
+                    getGameplayAnchor: () => this.planetoidRenderer?.getGameplayAnchor(),
+                    evolution: this.evolutionController,
+                };
+            }
+        }
+        // Attach to landmarks if in gameplay/showcase mode or if landmarksGroup already exists
+        if (this.landmarksGroup && this.planetoidRenderer.group?.parent !== this.landmarksGroup) {
+            if (typeof this.landmarksGroup.add === 'function') {
+                this.landmarksGroup.add(this.planetoidRenderer.group);
+            } else if (typeof this.world?.scene?.add === 'function' && this.planetoidRenderer.group?.parent !== this.world.scene) {
+                this.world.scene.add(this.planetoidRenderer.group);
+            }
+        } else if (this.mode === 'gameplay' || this.mode === 'planet-showcase') {
+            const landmarks = this.ensureLandmarksGroup();
+            if (typeof landmarks?.add === 'function' && this.planetoidRenderer.group?.parent !== landmarks) {
+                landmarks.add(this.planetoidRenderer.group);
+            } else if (typeof this.world?.scene?.add === 'function' && this.planetoidRenderer.group?.parent !== this.world.scene) {
+                this.world.scene.add(this.planetoidRenderer.group);
+            }
+        }
+        return this.planetoidRenderer;
+    }
+
+    /**
+     * Resolves a stable celestial anchor in front of the player.
+     * In gameplay mode: derived once from active camera (target -1.80m behind Kendama)
+     *   or defaults to canonical hero-scale anchor (0.0, 1.48, -1.80).
+     * In planet-showcase mode: centers the planet directly along the camera viewing axis,
+     *   occupying ~74% of viewport height at showcase scale ~40.0.
+     */
+    updatePlanetoidAnchorFromCamera() {
+        if (!this.planetoidRenderer) return;
+
+        const isShowcase = (this.mode === 'planet-showcase');
+        const defaultAnchor = isShowcase ? PLANETOID_SHOWCASE_ANCHOR : PLANETOID_DEFAULT_ANCHOR;
+
+        let anchorX = defaultAnchor.x;
+        let anchorY = defaultAnchor.y;
+        let anchorZ = defaultAnchor.z;
+
+        const camera = this.world?.camera;
+        if (camera && typeof camera.getWorldPosition === 'function' && typeof camera.getWorldDirection === 'function') {
+            const camPos = new Vector3();
+            camera.getWorldPosition(camPos);
+            const camDir = new Vector3();
+            camera.getWorldDirection(camDir);
+
+            if (camPos.lengthSq() > 0.01 || Math.abs(camDir.z) > 0.1) {
+                if (camDir.lengthSq() > 0.001) {
+                    camDir.normalize();
+
+                    if (isShowcase) {
+                        // In showcase mode: center planet along camera forward sightline
+                        const showcaseDistance = 2.70;
+                        anchorX = camPos.x + camDir.x * showcaseDistance;
+                        anchorY = camPos.y + camDir.y * showcaseDistance;
+                        anchorZ = camPos.z + camDir.z * showcaseDistance;
+
+                        // Calibrate showcase scale if camera fov is available to guarantee ~58% viewport height (accommodating celestial rings)
+                        if (typeof camera.fov === 'number' && Number.isFinite(camera.fov) && camera.fov > 10) {
+                            const vFovRad = (camera.fov * Math.PI) / 180;
+                            const visibleHeight = 2.0 * showcaseDistance * Math.tan(vFovRad / 2.0);
+                            const calibratedScale = (visibleHeight * 0.58) / (2.0 * this.planetoidRenderer.radius);
+                            this.planetoidRenderer.setShowcaseScale(calibratedScale);
+                        }
+                    } else {
+                        // Maintain centered alignment along the player's viewing axis
+                        anchorX = Math.abs(camDir.x) > 0.05 ? (camPos.x + camDir.x * 1.80) : 0.0;
+                        // Keep Y in comfortable seated viewing height 1.45 - 1.50m
+                        const derivedY = camPos.y > 0.5 ? camPos.y - 0.10 : PLANETOID_DEFAULT_ANCHOR.y;
+                        anchorY = Math.max(1.45, Math.min(1.50, derivedY));
+                        // Depth: target -1.7m to -1.9m behind the Kendama
+                        const targetDepth = -1.80;
+                        const derivedZ = camPos.z !== 0 ? (camPos.z + targetDepth) : targetDepth;
+                        anchorZ = Math.max(-1.90, Math.min(-1.70, derivedZ));
+                    }
+                }
+            }
+        }
+
+        if (isShowcase) {
+            this.planetoidRenderer.setShowcaseAnchor(anchorX, anchorY, anchorZ);
+        } else {
+            this.planetoidRenderer.setAnchorPosition(anchorX, anchorY, anchorZ);
+        }
+    }
+
+    /**
+     * Returns the active PlanetoidRenderer instance.
+     * @returns {PlanetoidRenderer | null}
+     */
+    getPlanetoidRenderer() {
+        return this.planetoidRenderer;
+    }
+
+    /**
      * Sets stardust visibility independently from nebula and starfield.
      * @param {boolean} visible
      * @returns {boolean | undefined}
@@ -637,8 +882,12 @@ export class CelestialEnvironmentSystem extends createSystem({
 
         const onChildAdded = (event) => {
             const child = event?.child || event?.object;
-            if (child && this.mode === 'gameplay') {
-                this.applyGameplayVisibility();
+            if (child) {
+                if (this.mode === 'gameplay') {
+                    this.applyGameplayVisibility();
+                } else if (this.mode === 'planet-showcase') {
+                    this.applyShowcaseVisibility();
+                }
             }
         };
 
@@ -737,6 +986,97 @@ export class CelestialEnvironmentSystem extends createSystem({
             if (resolvedCupPreview.scale && typeof resolvedCupPreview.scale.set === 'function') {
                 resolvedCupPreview.scale.set(1.35, 1.35, 1.35);
             }
+
+            // The physical Kendama ball (celestial-tama) remains visible in gameplay mode
+            const tamaMesh = resolvedCupPreview.getObjectByName?.('celestial-tama');
+            if (tamaMesh) {
+                this.recordBaseline(tamaMesh);
+                tamaMesh.visible = true;
+            }
+
+            const planetoid = this.ensurePlanetoidRenderer();
+            if (planetoid) {
+                this.updatePlanetoidAnchorFromCamera();
+                if (planetoid.group) {
+                    planetoid.group.visible = true;
+                }
+            }
+        }
+    }
+
+    /**
+     * Applies showcase visibility: hides showroom furniture and hides Kendama visually,
+     * while leaving all physics, game loops, and contracts running unaffected.
+     */
+    applyShowcaseVisibility() {
+        // 1. Standalone showroom objects to hide
+        for (const id of SHOWROOM_NODE_IDS_TO_HIDE) {
+            const obj = this.findSceneObject(id);
+            if (obj) {
+                this.recordBaseline(obj);
+                obj.visible = false;
+            }
+        }
+
+        // Also track originalStudioFloorVisible if studio-floor was found
+        const floor = this.findSceneObject('studio-floor', 'Studio Floor');
+        if (floor && this.originalStudioFloorVisible === null && typeof floor.visible === 'boolean') {
+            this.originalStudioFloorVisible = this.visibilityBaseline.get(floor) ?? floor.visible;
+        }
+
+        // 2. Select Plinth and children: hide completely in showcase mode
+        const selectPlinth = this.findSceneObject('select-plinth', 'Select Plinth');
+        if (selectPlinth) {
+            this.recordBaseline(selectPlinth);
+            selectPlinth.visible = false;
+            this.wireChildAddedListener(selectPlinth, 'select-plinth');
+
+            if (Array.isArray(selectPlinth.children)) {
+                for (const child of selectPlinth.children) {
+                    this.recordBaseline(child);
+                    child.visible = false;
+                }
+            }
+        }
+
+        // 3. Kendama inspection views & Tama: hide completely in showcase mode
+        const cupPreview = this.findSceneObject('cup-preview', 'Big Cup Preview') ||
+            selectPlinth?.getObjectByName?.('cup-preview') || null;
+        if (cupPreview) {
+            this.recordBaseline(cupPreview);
+            cupPreview.visible = false;
+            this.wireChildAddedListener(cupPreview, 'cup-preview');
+
+            for (const auxName of KENDAMA_AUXILIARY_MODELS_TO_HIDE) {
+                const auxModel = cupPreview.getObjectByName?.(auxName);
+                if (auxModel) {
+                    this.recordBaseline(auxModel);
+                    auxModel.visible = false;
+                }
+            }
+
+            for (const activeName of KENDAMA_ACTIVE_MODEL_TO_KEEP) {
+                const activeModel = cupPreview.getObjectByName?.(activeName);
+                if (activeModel) {
+                    this.recordBaseline(activeModel);
+                    activeModel.visible = false;
+                }
+            }
+
+            const tamaMesh = cupPreview.getObjectByName?.('celestial-tama');
+            if (tamaMesh) {
+                this.recordBaseline(tamaMesh);
+                tamaMesh.visible = false;
+            }
+        }
+
+        const planetoid = this.ensurePlanetoidRenderer();
+        if (planetoid) {
+            planetoid.setShowcaseMode(true);
+            this.updatePlanetoidAnchorFromCamera();
+            if (planetoid.group) {
+                planetoid.group.visible = true;
+            }
         }
     }
 
@@ -748,6 +1088,11 @@ export class CelestialEnvironmentSystem extends createSystem({
             if (obj && typeof obj.visible === 'boolean') {
                 obj.visible = originalVisible;
             }
+        }
+
+        // Hide PlanetoidRenderer in showroom mode unless debug mode active
+        if (this.planetoidRenderer?.group && !this.planetoidRenderer.isDebugMode()) {
+            this.planetoidRenderer.group.visible = false;
         }
 
         // Restore Kendama preview position and scale to authored showroom pedestal values
@@ -773,26 +1118,59 @@ export class CelestialEnvironmentSystem extends createSystem({
 
     /**
      * Switches the environment mode.
-     * @param {'showroom' | 'gameplay'} mode - Target mode.
+     * @param {'showroom' | 'gameplay' | 'planet-showcase'} mode - Target mode.
      * @returns {boolean} True if successfully switched.
      */
     setMode(mode) {
-        if (mode !== 'showroom' && mode !== 'gameplay') {
-            console.warn(`[CelestialEnvironmentSystem] Unknown mode "${mode}". Expected "showroom" or "gameplay".`);
+        if (mode !== 'showroom' && mode !== 'gameplay' && mode !== 'planet-showcase') {
+            console.warn(`[CelestialEnvironmentSystem] Unknown mode "${mode}". Expected "showroom", "gameplay", or "planet-showcase".`);
             return false;
         }
 
         this.mode = mode;
-        this.activeConfig = (mode === 'gameplay')
-            ? GAMEPLAY_PASTEL_GALAXY_CONFIG
-            : SHOWROOM_ENVIRONMENT_CONFIG;
+        this.activeConfig = (mode === 'showroom')
+            ? SHOWROOM_ENVIRONMENT_CONFIG
+            : GAMEPLAY_PASTEL_GALAXY_CONFIG;
 
         const levelRoot = this.getLevelRoot();
         if (levelRoot) {
             applyEnvironmentConfig(levelRoot, this.activeConfig);
         }
 
-        if (mode === 'gameplay') {
+        if (mode === 'planet-showcase') {
+            // Apply showcase visibility: hides showroom furniture & hides Kendama visually
+            this.applyShowcaseVisibility();
+
+            // Activate celestial rendering components (reusing instances, no duplicates)
+            const nebula = this.ensureNebulaMesh();
+            if (nebula) {
+                nebula.visible = true;
+            }
+            const starfield = this.ensureStarfieldMesh();
+            if (starfield) {
+                starfield.visible = true;
+            }
+            const stardust = this.ensureStardustMesh();
+            if (stardust) {
+                stardust.visible = true;
+            }
+            const landmarks = this.ensureLandmarksGroup();
+            if (landmarks) {
+                landmarks.visible = true;
+            }
+            const belt = this.ensureCelestialBelt();
+            if (belt) {
+                belt.visible = true;
+            }
+            const planetoid = this.ensurePlanetoidRenderer();
+            if (planetoid) {
+                planetoid.setShowcaseMode(true);
+                this.updatePlanetoidAnchorFromCamera();
+                if (planetoid.group) {
+                    planetoid.group.visible = true;
+                }
+            }
+        } else if (mode === 'gameplay') {
             // Apply gameplay visibility (hiding showroom furniture and auxiliary Kendama views)
             this.applyGameplayVisibility();
 
@@ -817,6 +1195,14 @@ export class CelestialEnvironmentSystem extends createSystem({
             if (belt) {
                 belt.visible = true;
             }
+            const planetoid = this.ensurePlanetoidRenderer();
+            if (planetoid) {
+                planetoid.setShowcaseMode(false);
+                this.updatePlanetoidAnchorFromCamera();
+                if (planetoid.group) {
+                    planetoid.group.visible = true;
+                }
+            }
         } else {
             // Restore original showroom visibility states from baseline
             this.restoreShowroomVisibility();
@@ -837,24 +1223,53 @@ export class CelestialEnvironmentSystem extends createSystem({
             if (this.beltGroup) {
                 this.beltGroup.visible = false;
             }
+            if (this.planetoidRenderer) {
+                this.planetoidRenderer.setShowcaseMode(false);
+                if (this.planetoidRenderer.group && !this.planetoidRenderer.isDebugMode()) {
+                    this.planetoidRenderer.group.visible = false;
+                }
+            }
         }
 
         return true;
     }
 
     /**
+     * Toggles dedicated Planet Showcase Mode on or off.
+     * When enabled, the planet is prominently hero-scaled and centered, and Kendama is hidden.
+     * When disabled, reverts to normal gameplay composition.
+     *
+     * @param {boolean} [enabled=true]
+     * @returns {boolean} True if successfully switched.
+     */
+    setPlanetShowcaseMode(enabled = true) {
+        return this.setMode(enabled ? 'planet-showcase' : 'gameplay');
+    }
+
+    /**
+     * Returns whether Planet Showcase Mode is currently active.
+     * @returns {boolean}
+     */
+    isPlanetShowcaseMode() {
+        return this.mode === 'planet-showcase';
+    }
+
+    /**
      * Toggles between showroom and gameplay environment modes.
+     * If currently in planet-showcase, returns to gameplay.
      * @returns {'showroom' | 'gameplay'} The new active mode.
      */
     toggleMode() {
-        const nextMode = (this.mode === 'showroom') ? 'gameplay' : 'showroom';
+        const nextMode = (this.mode === 'showroom')
+            ? 'gameplay'
+            : (this.mode === 'planet-showcase' ? 'gameplay' : 'showroom');
         this.setMode(nextMode);
         return this.mode;
     }
 
     /**
      * Returns the current environment mode.
-     * @returns {'showroom' | 'gameplay'}
+     * @returns {'showroom' | 'gameplay' | 'planet-showcase'}
      */
     getMode() {
         return this.mode;
@@ -893,7 +1308,7 @@ export class CelestialEnvironmentSystem extends createSystem({
     }
 
     update(dt) {
-        if (this.mode === 'gameplay') {
+        if (this.mode === 'gameplay' || this.mode === 'planet-showcase') {
             const levelRoot = this.getLevelRoot();
             if (levelRoot) {
                 const currentSky = levelRoot.getVectorView?.(DomeGradient, 'sky');
@@ -903,8 +1318,12 @@ export class CelestialEnvironmentSystem extends createSystem({
                 }
             }
 
-            // Enforce gameplay visibility in case of late-loaded children
-            this.applyGameplayVisibility();
+            // Enforce appropriate visibility in case of late-loaded children
+            if (this.mode === 'planet-showcase') {
+                this.applyShowcaseVisibility();
+            } else {
+                this.applyGameplayVisibility();
+            }
 
             const deltaSeconds = (typeof dt === 'number' && Number.isFinite(dt)) ? dt : 0.016;
 
@@ -937,12 +1356,62 @@ export class CelestialEnvironmentSystem extends createSystem({
                 updateCelestialBelt(this.beltGroup, deltaSeconds);
             }
         }
+
+        // Update PlanetoidRenderer driven by read-only BallState & PlanetState
+        if (this.planetoidRenderer && (this.mode === 'gameplay' || this.mode === 'planet-showcase' || this.planetoidRenderer.isDebugMode())) {
+            const deltaSeconds = (typeof dt === 'number' && Number.isFinite(dt)) ? dt : 0.016;
+
+            let activeBallState = this.lastBallState;
+            if (!activeBallState) {
+                if (!this._defaultSeatedBallState) {
+                    this._defaultSeatedBallState = new BallState({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, BallMode.SEATED);
+                }
+                activeBallState = this._defaultSeatedBallState;
+            }
+
+            let activePlanetState = this.lastPlanetState;
+            if (!activePlanetState) {
+                if (!this._defaultPlanetState) {
+                    this._defaultPlanetState = new PlanetState();
+                }
+                activePlanetState = this._defaultPlanetState;
+            }
+
+            this.planetoidRenderer.update(deltaSeconds, activeBallState, activePlanetState);
+            this.evolutionController?.update(deltaSeconds);
+        }
     }
 
     destroy() {
+        if (this.evolutionController) {
+            this.evolutionController.destroy();
+            this.evolutionController = null;
+        }
+        if (this.planetoidRenderer) {
+            this.planetoidRenderer.setShowcaseMode(false);
+        }
         // Restore showroom visibility before destroying
         this.restoreShowroomVisibility();
         this.visibilityBaseline.clear();
+
+        // Clean up EventBus listeners
+        if (Array.isArray(this.eventUnsubs)) {
+            this.eventUnsubs.forEach((unsub) => unsub());
+            this.eventUnsubs = [];
+        }
+
+        // Dispose PlanetoidRenderer
+        if (this.planetoidRenderer) {
+            this.planetoidRenderer.group?.removeFromParent?.();
+            this.planetoidRenderer.dispose();
+            this.planetoidRenderer = null;
+        }
+        const globalScope = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
+        if (globalScope) {
+            if (globalScope.planetoidRenderer === this.planetoidRenderer) {
+                globalScope.planetoidRenderer = null;
+            }
+        }
 
         // Dispose celestial objects owned exclusively by this system
         if (this.beltGroup) {

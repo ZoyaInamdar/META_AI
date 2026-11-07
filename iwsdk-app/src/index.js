@@ -26,14 +26,18 @@ World.create(document.getElementById('scene-container'), projectOptions).then((w
         let startupMode = 'showroom';
         if (typeof window !== 'undefined' && window.location?.search) {
             const params = new URLSearchParams(window.location.search);
-            if (params.get('mode') === 'gameplay') {
+            const modeParam = params.get('mode');
+            if (modeParam === 'gameplay') {
                 startupMode = 'gameplay';
+            } else if (modeParam === 'planet-showcase') {
+                startupMode = 'planet-showcase';
             }
         }
         envSystem.setMode(startupMode);
         if (typeof window !== 'undefined') {
             window.celestialEnvironment = envSystem;
             window.planetoidRenderer = envSystem.planetoidRenderer;
+            window.celestialEvolution = envSystem.evolutionController;
         }
         console.log(`[CelestialEnvironmentSystem] Started in "${startupMode}" mode`);
     }

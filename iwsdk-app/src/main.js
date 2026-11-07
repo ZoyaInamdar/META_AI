@@ -256,14 +256,27 @@ export class DefaultOrbitalEngine {
  * Default stub for Person C's World Renderer.
  */
 export class DefaultWorldRenderer {
-  constructor() {
+  constructor(options = {}) {
     this.renderedFrameCount = 0;
     this.lastSnapshot = null;
+    this.planetoidRenderer = options.planetoidRenderer || null;
+  }
+
+  setPlanetoidRenderer(renderer) {
+    this.planetoidRenderer = renderer;
   }
 
   render(snapshot) {
     this.lastSnapshot = snapshot;
     this.renderedFrameCount++;
+    if (this.planetoidRenderer && snapshot) {
+      this.planetoidRenderer.update({
+        ballState: snapshot.ballState,
+        planetState: snapshot.planetState,
+        deltaTime: snapshot.dtClamped,
+        elapsedTime: snapshot.timestamp ? snapshot.timestamp / 1000 : null
+      });
+    }
   }
 }
 

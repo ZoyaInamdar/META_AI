@@ -1388,7 +1388,7 @@ describe('KendamaPresets Module & Set 2: Galaxy Wood', () => {
         });
     });
 
-    describe('Independence from Sets 1–4: Celestial Kendama, Galaxy Wood, Bubblegum Pop, and Dark Matter', () => {
+    describe('Independence from Sets 1â€“4: Celestial Kendama, Galaxy Wood, Bubblegum Pop, and Dark Matter', () => {
         it('preserves Set 1 Celestial Kendama materials and default showroom asset', () => {
             // Default showroom asset without options must remain Celestial Kendama
             const defaultRoot = createBigCupPreviewAsset();
