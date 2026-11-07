@@ -217,6 +217,17 @@ export class CatchFlow {
     }
 
     /**
+     * Debug helper to re-seat the ball directly onto a specified cup.
+     * @param {string} cupKey
+     * @param {any} [kenPose=null]
+     */
+    resetSeatCup(cupKey, kenPose = null) {
+        this._seatCupKey = cupKey;
+        this._previousSeatCupKey = cupKey;
+        this._ballPosition = { ...computeCupWorldSeatPoint(cupKey, kenPose) };
+    }
+
+    /**
      * Defensive copy of current ball position in world space.
      * @returns {{ x: number, y: number, z: number }}
      */
@@ -260,6 +271,54 @@ export class CatchFlow {
     }
 
     /**
+     * Reports a miss for the active flight if currently in 'air' mode and no miss
+     * has been reported yet for this flight.
+     * Transitions state back to 'seated' and resets ball position to the previous seated cup.
+     *
+     * @param {any} [kenPose] - Current Ken pose
+     * @returns {{ type: 'MISS', flightId: any } | null}
+     */
+    reportMiss(kenPose) {
+        if (this._state !== 'air' || this._missReportedForFlight) {
+            return null;
+        }
+        this._missReportedForFlight = true;
+        this._state = 'seated';
+        this._seatCupKey = this._previousSeatCupKey;
+        const seatPoint = computeCupWorldSeatPoint(this._seatCupKey, kenPose);
+        this._ballPosition = { ...seatPoint };
+        return { type: 'MISS', flightId: this._flightId };
+    }
+
+    /**
+     * Checks whether the flight trajectory has ended without a catch, and reports a miss if so.
+     *
+     * @param {any} [kenPose] - Current Ken pose
+     * @param {any} [ballOrPosition] - Ball trajectory state or wrapper
+     * @returns {{ type: 'MISS', flightId: any } | null}
+     */
+    checkFlightExpiration(kenPose, ballOrPosition) {
+        if (this._state !== 'air' || this._missReportedForFlight) {
+            return null;
+        }
+
+        const isFlightEnded = Boolean(
+            ballOrPosition?.mode === 'seated' ||
+            ballOrPosition?.isAirborne === false ||
+            (typeof ballOrPosition?.isAirborne === 'function' && !ballOrPosition.isAirborne()) ||
+            (typeof ballOrPosition?.elapsed === 'number' &&
+             typeof ballOrPosition?.flightDuration === 'number' &&
+             ballOrPosition.elapsed >= ballOrPosition.flightDuration)
+        );
+
+        if (isFlightEnded) {
+            return this.reportMiss(kenPose);
+        }
+
+        return null;
+    }
+
+    /**
      * Updates the catch flow simulation state.
      *
      * @param {number} dt - Frame delta time in seconds
@@ -300,19 +359,24 @@ export class CatchFlow {
                 this._ballPosition.z = extPos.z;
             }
 
-            // Miss detection:
+            // 1. Depth-based miss detection (existing, preserved as-is):
             // In 'air', when ball is descending (vy < 0) and ball.y < ken.y - MISS_DEPTH
             const vy = extVel?.y ?? 0.0;
             const isDescending = vy < 0.0;
             const isBelowMissDepth = this._ballPosition.y < (kenPos.y - MISS_DEPTH);
 
             if (!this._missReportedForFlight && isDescending && isBelowMissDepth) {
-                this._missReportedForFlight = true;
-                this._state = 'seated';
-                this._seatCupKey = this._previousSeatCupKey;
-                const seatPoint = computeCupWorldSeatPoint(this._seatCupKey, kenPose);
-                this._ballPosition = { ...seatPoint };
-                return { type: 'MISS', flightId: this._flightId };
+                return this.reportMiss(kenPose);
+            }
+
+            // 2. Flight expiration miss detection:
+            // If trajectory reports flight ended (mode 'seated' / isAirborne false / elapsed >= flightDuration),
+            // and caller has not deferred expiration check to run final-tick catch evaluation first.
+            if (!ballOrPosition?.deferExpiration) {
+                const expirationMiss = this.checkFlightExpiration(kenPose, ballOrPosition);
+                if (expirationMiss) {
+                    return expirationMiss;
+                }
             }
 
             return null;

@@ -925,6 +925,7 @@ describe('GameLoop (Person A)', () => {
         eventBus,
         gameplayKenGroup: kenGroup,
         inputSource: adapter,
+        rollGain: 1.0,
         trajectory,
         catchFlow,
         detector,
@@ -1069,6 +1070,972 @@ describe('GameLoop (Person A)', () => {
 
       eventBus.emit(Events.CADENCE, 2.2);
       expect(cadenceCalled).toBe(false); // Unsubscribed
+    });
+  });
+
+  // ==========================================================================
+  // I. WebXR Frame & HandPoseAdapter Integration
+  // ==========================================================================
+  describe('I. WebXR Frame & HandPoseAdapter Integration', () => {
+    const createMockXRJoint = (name) => ({ name });
+    const createMockXRHand = (joints = {}) => new Map(Object.entries(joints));
+    const createMockXRInputSource = (joints = {}, handedness = 'right') => ({
+      handedness,
+      hand: createMockXRHand(joints),
+    });
+    const createMockXRFrame = (poses = {}, refSpace = { _id: 'ref-space' }) => ({
+      referenceSpace: refSpace,
+      getJointPose: vi.fn((joint, space) => {
+        if (!joint || space !== refSpace) return null;
+        return poses[joint.name] || null;
+      }),
+    });
+
+    it('36. Valid XR wrist data extracts and propagates to gameplayKenGroup through inputSystem', () => {
+      const wristJoint = createMockXRJoint('wrist');
+      const inputSource = createMockXRInputSource({ wrist: wristJoint }, 'right');
+      const refSpace = { _id: 'ref-space' };
+
+      const wristPose = {
+        transform: {
+          position: { x: 0.15, y: 1.30, z: -0.40 },
+          orientation: { x: 0.0, y: 0.38268, z: 0.0, w: 0.92388 },
+        },
+        radius: 0.012,
+      };
+
+      const frame = createMockXRFrame({ wrist: wristPose }, refSpace);
+
+      const handAdapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+      const xrLoop = new GameLoop({
+        gameplayKenGroup: kenGroup,
+        inputSource: handAdapter,
+        inputSourceType: 'hand',
+        referenceSpace: refSpace,
+        xrInputSource: inputSource,
+        poseFilter: null, // Test pure extraction & propagation first
+      });
+
+      // Frame 1: pass real WebXR frame
+      xrLoop.inputSystem.update(0.016, frame);
+
+      expect(frame.getJointPose).toHaveBeenCalledWith(wristJoint, refSpace);
+      expect(kenGroup.position.x).toBeCloseTo(0.15);
+      expect(kenGroup.position.y).toBeCloseTo(1.30);
+      expect(kenGroup.position.z).toBeCloseTo(-0.40);
+      expect(kenGroup.quaternion.y).toBeCloseTo(0.38268);
+      expect(kenGroup.quaternion.w).toBeCloseTo(0.92388);
+      expect(xrLoop.isTrackingValid).toBe(true);
+    });
+
+    it('37. Missing XR frame (null or undefined) safely handled, sets tracking invalid and preserves canonical pose', () => {
+      const handAdapter = new HandPoseAdapter({ hand: 'right' });
+      const xrLoop = new GameLoop({
+        gameplayKenGroup: kenGroup,
+        inputSource: handAdapter,
+        inputSourceType: 'hand',
+        poseFilter: null,
+      });
+
+      kenGroup.position.set(0.20, 1.25, -0.45);
+
+      // Pass null frame
+      xrLoop.inputSystem.update(0.016, null);
+
+      expect(xrLoop.isTrackingValid).toBe(false);
+      // Canonical group position remains intact
+      expect(kenGroup.position.x).toBeCloseTo(0.20);
+      expect(kenGroup.position.y).toBeCloseTo(1.25);
+      expect(kenGroup.position.z).toBeCloseTo(-0.45);
+
+      // Pass undefined frame
+      xrLoop.inputSystem.update(0.016, undefined);
+      expect(xrLoop.isTrackingValid).toBe(false);
+      expect(kenGroup.position.x).toBeCloseTo(0.20);
+    });
+
+    it('38. Missing hand input source safely handled, preserves canonical pose and marks tracking invalid', () => {
+      const refSpace = { _id: 'ref-space' };
+      const frame = createMockXRFrame({}, refSpace);
+
+      const handAdapter = new HandPoseAdapter({ hand: 'right' });
+      const xrLoop = new GameLoop({
+        gameplayKenGroup: kenGroup,
+        inputSource: handAdapter,
+        inputSourceType: 'hand',
+        referenceSpace: refSpace,
+        xrInputSource: null, // No hand source
+        poseFilter: null,
+      });
+
+      kenGroup.position.set(0.05, 1.10, -0.35);
+
+      xrLoop.inputSystem.update(0.016, frame);
+
+      expect(xrLoop.isTrackingValid).toBe(false);
+      expect(kenGroup.position.x).toBeCloseTo(0.05);
+    });
+
+    it('39. Missing wrist joint on hand input source safely handled without throwing', () => {
+      const refSpace = { _id: 'ref-space' };
+      // Hand without wrist joint
+      const inputSource = createMockXRInputSource({}, 'right');
+      const frame = createMockXRFrame({}, refSpace);
+
+      const handAdapter = new HandPoseAdapter({ hand: 'right' });
+      const xrLoop = new GameLoop({
+        gameplayKenGroup: kenGroup,
+        inputSource: handAdapter,
+        inputSourceType: 'hand',
+        referenceSpace: refSpace,
+        xrInputSource: inputSource,
+        poseFilter: null,
+      });
+
+      kenGroup.position.set(0.12, 1.25, -0.40);
+
+      expect(() => {
+        xrLoop.inputSystem.update(0.016, frame);
+      }).not.toThrow();
+
+      expect(xrLoop.isTrackingValid).toBe(false);
+      expect(kenGroup.position.x).toBeCloseTo(0.12);
+    });
+
+    it('40. Invalid tracking (getJointPose returns null) resets PoseFilter and preserves canonical transform in-place', () => {
+      const wristJoint = createMockXRJoint('wrist');
+      const inputSource = createMockXRInputSource({ wrist: wristJoint }, 'right');
+      const refSpace = { _id: 'ref-space' };
+
+      // Initial valid pose
+      const validPose = {
+        transform: {
+          position: { x: 0.10, y: 1.25, z: -0.45 },
+          orientation: { x: 0, y: 0, z: 0, w: 1 },
+        },
+      };
+
+      const validFrame = createMockXRFrame({ wrist: validPose }, refSpace);
+
+      const mockFilter = {
+        reset: vi.fn(),
+        filter: vi.fn((pos) => ({ ...pos })),
+      };
+
+      const handAdapter = new HandPoseAdapter({ hand: 'right' });
+      const xrLoop = new GameLoop({
+        gameplayKenGroup: kenGroup,
+        inputSource: handAdapter,
+        inputSourceType: 'hand',
+        referenceSpace: refSpace,
+        xrInputSource: inputSource,
+        poseFilter: mockFilter,
+        rollGain: 1.0,
+      });
+
+      // Frame 1: Valid tracking
+      xrLoop.inputSystem.update(0.016, validFrame);
+      expect(xrLoop.isTrackingValid).toBe(true);
+      expect(kenGroup.position.x).toBeCloseTo(0.10);
+
+      // Frame 2: getJointPose returns null (optical occlusion / hand out of FOV)
+      const lostFrame = createMockXRFrame({ wrist: null }, refSpace);
+      xrLoop.inputSystem.update(0.016, lostFrame);
+
+      expect(xrLoop.isTrackingValid).toBe(false);
+      expect(mockFilter.reset).toHaveBeenCalled();
+      // Canonical position remains exactly at previous valid position
+      expect(kenGroup.position.x).toBeCloseTo(0.10);
+      expect(kenGroup.position.y).toBeCloseTo(1.25);
+      expect(kenGroup.position.z).toBeCloseTo(-0.45);
+    });
+
+    it('41. Tracking recovery resets PoseFilter fresh, filters new position, and propagates quaternion', () => {
+      const wristJoint = createMockXRJoint('wrist');
+      const inputSource = createMockXRInputSource({ wrist: wristJoint }, 'right');
+      const refSpace = { _id: 'ref-space' };
+
+      const pose1 = {
+        transform: {
+          position: { x: 0.10, y: 1.25, z: -0.45 },
+          orientation: { x: 0, y: 0, z: 0, w: 1 },
+        },
+      };
+      const poseAfterRecovery = {
+        transform: {
+          position: { x: 0.25, y: 1.35, z: -0.40 },
+          orientation: { x: 0.1, y: 0.2, z: 0.3, w: 0.9 },
+        },
+      };
+
+      const frame1 = createMockXRFrame({ wrist: pose1 }, refSpace);
+      const lostFrame = createMockXRFrame({ wrist: null }, refSpace);
+      const recoveryFrame = createMockXRFrame({ wrist: poseAfterRecovery }, refSpace);
+
+      const mockFilter = {
+        reset: vi.fn(),
+        filter: vi.fn((pos) => ({ ...pos })),
+      };
+
+      const handAdapter = new HandPoseAdapter({ hand: 'right' });
+      const xrLoop = new GameLoop({
+        gameplayKenGroup: kenGroup,
+        inputSource: handAdapter,
+        inputSourceType: 'hand',
+        referenceSpace: refSpace,
+        xrInputSource: inputSource,
+        poseFilter: mockFilter,
+        rollGain: 1.0,
+      });
+
+      // 1. Valid frame
+      xrLoop.inputSystem.update(0.016, frame1);
+      expect(xrLoop.isTrackingValid).toBe(true);
+      mockFilter.reset.mockClear();
+
+      // 2. Tracking lost
+      xrLoop.inputSystem.update(0.016, lostFrame);
+      expect(xrLoop.isTrackingValid).toBe(false);
+      expect(mockFilter.reset).toHaveBeenCalledTimes(1);
+      mockFilter.reset.mockClear();
+
+      // 3. Tracking recovers
+      xrLoop.inputSystem.update(0.016, recoveryFrame);
+      expect(xrLoop.isTrackingValid).toBe(true);
+      // PoseFilter must be reset upon recovery to avoid smoothing across the tele-jump
+      expect(mockFilter.reset).toHaveBeenCalledTimes(1);
+      expect(mockFilter.filter).toHaveBeenCalledWith(
+        expect.objectContaining({ x: 0.25, y: 1.35, z: -0.40 }),
+        0.016
+      );
+
+      // Gameplay group updated with new transform
+      expect(kenGroup.position.x).toBeCloseTo(0.25);
+      expect(kenGroup.position.y).toBeCloseTo(1.35);
+      expect(kenGroup.quaternion.x).toBeCloseTo(0.1 / Math.hypot(0.1, 0.2, 0.3, 0.9));
+    });
+
+    it('42. Position is filtered while quaternion is normalized and copied directly without filtering', () => {
+      const wristJoint = createMockXRJoint('wrist');
+      const inputSource = createMockXRInputSource({ wrist: wristJoint }, 'right');
+      const refSpace = { _id: 'ref-space' };
+
+      const rawQuat = { x: 0.2, y: 0.0, z: 0.0, w: 0.8 };
+      const rawPos = { x: 0.15, y: 1.20, z: -0.45 };
+
+      const frame = createMockXRFrame({
+        wrist: { transform: { position: rawPos, orientation: rawQuat } },
+      }, refSpace);
+
+      const filteredPos = { x: 0.148, y: 1.201, z: -0.449 };
+      const mockFilter = {
+        reset: vi.fn(),
+        filter: vi.fn(() => filteredPos),
+      };
+
+      const handAdapter = new HandPoseAdapter({ hand: 'right' });
+      const xrLoop = new GameLoop({
+        gameplayKenGroup: kenGroup,
+        inputSource: handAdapter,
+        inputSourceType: 'hand',
+        referenceSpace: refSpace,
+        xrInputSource: inputSource,
+        poseFilter: mockFilter,
+        rollGain: 1.0,
+      });
+
+      xrLoop.inputSystem.update(0.016, frame);
+
+      // Position received filtered coordinates
+      expect(kenGroup.position.x).toBeCloseTo(0.148);
+      expect(kenGroup.position.y).toBeCloseTo(1.201);
+      expect(kenGroup.position.z).toBeCloseTo(-0.449);
+
+      // Quaternion received raw normalized orientation directly (filter was never called for orientation)
+      const qNorm = Math.hypot(0.2, 0.0, 0.0, 0.8);
+      expect(kenGroup.quaternion.x).toBeCloseTo(0.2 / qNorm);
+      expect(kenGroup.quaternion.w).toBeCloseTo(0.8 / qNorm);
+    });
+
+    it('43. Exactly one pipeline update per frame with matching XRFrame and delta time', () => {
+      const wristJoint = createMockXRJoint('wrist');
+      const inputSource = createMockXRInputSource({ wrist: wristJoint }, 'right');
+      const refSpace = { _id: 'ref-space' };
+
+      const wristPose = {
+        transform: {
+          position: { x: 0.11, y: 1.22, z: -0.44 },
+          orientation: { x: 0, y: 0, z: 0, w: 1 },
+        },
+      };
+      const frame = createMockXRFrame({ wrist: wristPose }, refSpace);
+
+      const handAdapter = new HandPoseAdapter({ hand: 'right' });
+      const xrLoop = new GameLoop({
+        gameplayKenGroup: kenGroup,
+        inputSource: handAdapter,
+        inputSourceType: 'hand',
+        referenceSpace: refSpace,
+        xrInputSource: inputSource,
+        poseFilter: null,
+      });
+
+      let stage1InputCalled = 0;
+      const originalInputUpdate = xrLoop.inputSystem.update.bind(xrLoop.inputSystem);
+      xrLoop.inputSystem.update = (dt, xrFrame) => {
+        stage1InputCalled++;
+        return originalInputUpdate(dt, xrFrame);
+      };
+
+      const pipeline = new GamePipeline({
+        eventBus,
+        gameplayKenGroup: kenGroup,
+        inputSystem: xrLoop.inputSystem,
+        catchDetector: xrLoop.catchDetector,
+        scoreManager: xrLoop.scoreManager,
+        missionController: new DefaultMissionController(eventBus),
+        fixedDelta: 1 / 120,
+      });
+
+      // Execute exactly one frame tick with WebXR frame context
+      const xrContext = {
+        frame,
+        referenceSpace: refSpace,
+        inputSource,
+      };
+
+      pipeline.tick(16.6667, xrContext, 1 / 60);
+
+      expect(pipeline.totalRenderTicks).toBe(1);
+      expect(stage1InputCalled).toBe(1);
+      expect(kenGroup.position.x).toBeCloseTo(0.11);
+    });
+
+    it('44. FakeInput continues to work without an XR session and bypasses PoseFilter', () => {
+      const fakeInput = new FakeInput({
+        initialPosition: { x: 0.05, y: 1.25, z: -0.45 },
+      });
+
+      const mockFilter = {
+        reset: vi.fn(),
+        filter: vi.fn(),
+      };
+
+      const fakeLoop = new GameLoop({
+        gameplayKenGroup: kenGroup,
+        inputSource: fakeInput,
+        inputSourceType: 'fake',
+        poseFilter: mockFilter,
+      });
+
+      // No XR session: xrFrame is null
+      fakeLoop.inputSystem.update(0.016, null);
+
+      // FakeInput updates gameplayKenGroup
+      expect(kenGroup.position.x).toBeCloseTo(0.05);
+      expect(kenGroup.position.y).toBeCloseTo(1.25);
+      expect(kenGroup.position.z).toBeCloseTo(-0.45);
+
+      // PoseFilter is bypassed for FakeInput
+      expect(mockFilter.filter).not.toHaveBeenCalled();
+    });
+
+    it('45. GameLoop.updateInput safely unpacks XR context wrapper, updating setXRContext and passing actual XRFrame', () => {
+      const wristJoint = createMockXRJoint('wrist');
+      const inputSource = createMockXRInputSource({ wrist: wristJoint }, 'right');
+      const refSpace = { _id: 'ref-space-live' };
+      const wristPose = {
+        transform: {
+          position: { x: 0.14, y: 1.28, z: -0.42 },
+          orientation: { x: 0, y: 0, z: 0, w: 1 },
+        },
+      };
+      const frame = createMockXRFrame({ wrist: wristPose }, refSpace);
+
+      const handAdapter = new HandPoseAdapter({ hand: 'right' });
+      const xrLoop = new GameLoop({
+        gameplayKenGroup: kenGroup,
+        inputSource: handAdapter,
+        inputSourceType: 'hand',
+        poseFilter: null,
+      });
+
+      const setXRSpy = vi.spyOn(xrLoop, 'setXRContext');
+
+      const xrContext = {
+        frame,
+        referenceSpace: refSpace,
+        inputSource,
+        hand: 'right',
+      };
+
+      // updateInput is called with context wrapper
+      xrLoop.inputSystem.update(0.016, xrContext);
+
+      expect(setXRSpy).toHaveBeenCalledWith(xrContext);
+      expect(xrLoop.referenceSpace).toBe(refSpace);
+      expect(xrLoop.xrInputSource).toBe(inputSource);
+      expect(xrLoop.isTrackingValid).toBe(true);
+      expect(kenGroup.position.x).toBeCloseTo(0.14);
+    });
+
+    it('41. Hand pinch launch: detects pinch on off-hand (left) and launches ball', () => {
+      const refSpace = { _id: 'ref-space' };
+      const rightWristJoint = createMockXRJoint('wrist');
+      const leftThumbJoint = createMockXRJoint('thumb-tip');
+      const leftIndexJoint = createMockXRJoint('index-finger-tip');
+
+      const rightWristPose = {
+        transform: {
+          position: { x: 0.1, y: 1.25, z: -0.45 },
+          orientation: { x: 0, y: 0, z: 0, w: 1 },
+        },
+      };
+
+      const leftThumbPose = {
+        transform: { position: { x: -0.1, y: 1.25, z: -0.45 } },
+      };
+      const leftIndexPosePinch = {
+        transform: { position: { x: -0.1, y: 1.265, z: -0.45 } }, // distance 0.015 m (< 0.020 m pinch)
+      };
+      const leftIndexPoseOpen = {
+        transform: { position: { x: -0.1, y: 1.30, z: -0.45 } },  // distance 0.050 m
+      };
+
+      const rightInputSource = createMockXRInputSource({ wrist: rightWristJoint }, 'right');
+      const leftInputSource = createMockXRInputSource({
+        'thumb-tip': leftThumbJoint,
+        'index-finger-tip': leftIndexJoint,
+      }, 'left');
+
+      const handAdapter = new HandPoseAdapter({ hand: 'right' });
+      const xrLoop = new GameLoop({
+        eventBus,
+        gameplayKenGroup: kenGroup,
+        inputSource: handAdapter,
+        inputSourceType: 'hand',
+        trajectory,
+        catchFlow,
+        detector,
+        scoreManager,
+        launchHand: 'left',
+      });
+
+      const launchSpy = vi.spyOn(xrLoop, 'launchBall');
+
+      // Frame 1: baseline open (distance 0.05 m)
+      const frame1 = createMockXRFrame({
+        wrist: rightWristPose,
+        'thumb-tip': leftThumbPose,
+        'index-finger-tip': leftIndexPoseOpen,
+      }, refSpace);
+
+      const ctx1 = {
+        frame: frame1,
+        referenceSpace: refSpace,
+        inputSource: rightInputSource,
+        otherInputSource: leftInputSource,
+        hand: 'right',
+      };
+
+      xrLoop.inputSystem.update(0.016, ctx1);
+      expect(catchFlow.state).toBe('seated');
+      expect(launchSpy).not.toHaveBeenCalled();
+
+      // Frame 2: pinch closed (distance 0.015 m)
+      const frame2 = createMockXRFrame({
+        wrist: rightWristPose,
+        'thumb-tip': leftThumbPose,
+        'index-finger-tip': leftIndexPosePinch,
+      }, refSpace);
+
+      const ctx2 = {
+        frame: frame2,
+        referenceSpace: refSpace,
+        inputSource: rightInputSource,
+        otherInputSource: leftInputSource,
+        hand: 'right',
+      };
+
+      xrLoop.inputSystem.update(0.016, ctx2);
+      expect(launchSpy).toHaveBeenCalledTimes(1);
+      expect(catchFlow.state).toBe('air');
+    });
+
+    it('42. Pinch is ignored while the ball is not seated', () => {
+      const handAdapter = new HandPoseAdapter({ hand: 'right' });
+      const xrLoop = new GameLoop({
+        eventBus,
+        gameplayKenGroup: kenGroup,
+        inputSource: handAdapter,
+        inputSourceType: 'hand',
+        trajectory,
+        catchFlow,
+        detector,
+        scoreManager,
+      });
+
+      // Transition catchFlow into air state via onLaunch
+      catchFlow.onLaunch(1);
+      expect(catchFlow.state).toBe('air');
+
+      // Manually trigger a pinch launch request
+      xrLoop.pinchDetector.update(true, 0.05);
+      xrLoop.pinchDetector.update(true, 0.015);
+      expect(xrLoop.pinchDetector.launchRequested).toBe(true);
+
+      const launched = xrLoop.launchBall();
+      expect(launched).toBe(false);
+      expect(catchFlow.state).toBe('air');
+    });
+
+    it('43. launchHand config: supports right and either', () => {
+      const refSpace = { _id: 'ref-space' };
+      const rightWristJoint = createMockXRJoint('wrist');
+      const rightThumbJoint = createMockXRJoint('thumb-tip');
+      const rightIndexJoint = createMockXRJoint('index-finger-tip');
+
+      const rightWristPose = {
+        transform: {
+          position: { x: 0.1, y: 1.25, z: -0.45 },
+          orientation: { x: 0, y: 0, z: 0, w: 1 },
+        },
+      };
+      const rightThumbPose = { transform: { position: { x: 0.1, y: 1.25, z: -0.45 } } };
+      const rightIndexOpenPose = { transform: { position: { x: 0.1, y: 1.30, z: -0.45 } } };
+      const rightIndexPinchPose = { transform: { position: { x: 0.1, y: 1.265, z: -0.45 } } };
+
+      const rightInputSource = createMockXRInputSource({
+        wrist: rightWristJoint,
+        'thumb-tip': rightThumbJoint,
+        'index-finger-tip': rightIndexJoint,
+      }, 'right');
+
+      const handAdapter = new HandPoseAdapter({ hand: 'right' });
+      const xrLoop = new GameLoop({
+        eventBus,
+        gameplayKenGroup: kenGroup,
+        inputSource: handAdapter,
+        inputSourceType: 'hand',
+        trajectory,
+        catchFlow,
+        detector,
+        scoreManager,
+        launchHand: 'right',
+      });
+
+      const launchSpy = vi.spyOn(xrLoop, 'launchBall');
+
+      // Baseline frame
+      const frame1 = createMockXRFrame({
+        wrist: rightWristPose,
+        'thumb-tip': rightThumbPose,
+        'index-finger-tip': rightIndexOpenPose,
+      }, refSpace);
+      xrLoop.inputSystem.update(0.016, {
+        frame: frame1,
+        referenceSpace: refSpace,
+        inputSource: rightInputSource,
+        hand: 'right',
+      });
+
+      // Pinch frame
+      const frame2 = createMockXRFrame({
+        wrist: rightWristPose,
+        'thumb-tip': rightThumbPose,
+        'index-finger-tip': rightIndexPinchPose,
+      }, refSpace);
+      xrLoop.inputSystem.update(0.016, {
+        frame: frame2,
+        referenceSpace: refSpace,
+        inputSource: rightInputSource,
+        hand: 'right',
+      });
+
+      expect(launchSpy).toHaveBeenCalledTimes(1);
+      expect(catchFlow.state).toBe('air');
+    });
+  });
+
+  describe('Flight Expiration and Miss Handling', () => {
+    it('1. no catch -> exactly one MISS and state "seated" after ~0.84 s', () => {
+      const missEvents = [];
+      eventBus.on(Events.MISS, (evt) => missEvents.push(evt));
+
+      // Build initial streak
+      scoreManager.processCatchEvent({ type: 'CLEAN' }, 1000, 999);
+      expect(scoreManager.currentStreak).toBe(1);
+
+      // Launch ball
+      const launched = gameLoop.launchBall();
+      expect(launched).toBe(true);
+      expect(catchFlow.state).toBe('air');
+
+      // Step simulation for ~0.84 s (53 frames * 0.016 s = 0.848 s >= FLIGHT_DURATION 0.8390 s)
+      // Position Ken away from ball so no catch occurs
+      kenGroup.position.set(5.0, 1.25, -0.45);
+
+      for (let i = 0; i < 53; i++) {
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+      }
+
+      // Exactly one MISS must have been emitted
+      expect(missEvents.length).toBe(1);
+      expect(missEvents[0].flightId).toBe(1);
+      // CatchFlow must be back in 'seated'
+      expect(catchFlow.state).toBe('seated');
+      // ScoreManager streak reset
+      expect(scoreManager.currentStreak).toBe(0);
+    });
+
+    it('2. a second launch is accepted afterwards', () => {
+      const missEvents = [];
+      eventBus.on(Events.MISS, (evt) => missEvents.push(evt));
+
+      kenGroup.position.set(5.0, 1.25, -0.45);
+      gameLoop.launchBall();
+
+      // Run until expired
+      for (let i = 0; i < 53; i++) {
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+      }
+      expect(catchFlow.state).toBe('seated');
+      expect(missEvents.length).toBe(1);
+
+      // Second launch should now succeed
+      const secondLaunch = gameLoop.launchBall();
+      expect(secondLaunch).toBe(true);
+      expect(catchFlow.state).toBe('air');
+    });
+
+    it('3. a catch on the last tick is a catch, not a miss', () => {
+      const catchEvents = [];
+      const missEvents = [];
+      eventBus.on(Events.CATCH, (evt) => catchEvents.push(evt));
+      eventBus.on(Events.MISS, (evt) => missEvents.push(evt));
+
+      gameLoop.launchBall();
+
+      // Run 52 frames away from cup
+      kenGroup.position.set(5.0, 1.25, -0.45);
+      for (let i = 0; i < 52; i++) {
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+      }
+      expect(catchFlow.state).toBe('air');
+      expect(catchEvents.length).toBe(0);
+      expect(missEvents.length).toBe(0);
+
+      // Mock detector to confirm catch on the final frame (53rd frame)
+      vi.spyOn(detector, 'evaluateCatch').mockReturnValue({
+        confirmed: true,
+        valid: true,
+        cupKey: CupKey.BIG_CUP,
+        catchType: 'clean',
+        details: { distance: 0.005, relativeSpeed: 0.1, approachDot: 0.98 },
+      });
+
+      // Frame 53 (trajectory expires on this tick)
+      gameLoop.catchDetector.update(0.016, kenGroup);
+      gameLoop.scoreManager.update(0.016);
+
+      // Must be a catch, not a miss
+      expect(catchEvents.length).toBe(1);
+      expect(missEvents.length).toBe(0);
+      expect(catchFlow.state).toBe('catching');
+    });
+
+    it('4. no duplicate MISS if update keeps being called', () => {
+      const missEvents = [];
+      eventBus.on(Events.MISS, (evt) => missEvents.push(evt));
+
+      kenGroup.position.set(5.0, 1.25, -0.45);
+      gameLoop.launchBall();
+
+      // Run 53 frames to expire
+      for (let i = 0; i < 53; i++) {
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+      }
+      expect(missEvents.length).toBe(1);
+
+      // Run 30 additional frames
+      for (let i = 0; i < 30; i++) {
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+      }
+      // Must still be exactly one miss
+      expect(missEvents.length).toBe(1);
+    });
+
+    it('5. a catch mid-flight produces no MISS', () => {
+      const catchEvents = [];
+      const missEvents = [];
+      eventBus.on(Events.CATCH, (evt) => catchEvents.push(evt));
+      eventBus.on(Events.MISS, (evt) => missEvents.push(evt));
+
+      gameLoop.launchBall();
+
+      // Mid-flight (e.g. frame 25 ~0.4s)
+      for (let i = 0; i < 25; i++) {
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+      }
+
+      // Catch mid-flight
+      vi.spyOn(detector, 'evaluateCatch').mockReturnValue({
+        confirmed: true,
+        valid: true,
+        cupKey: CupKey.BIG_CUP,
+        catchType: 'clean',
+        details: { distance: 0.005, relativeSpeed: 0.1, approachDot: 0.98 },
+      });
+
+      gameLoop.catchDetector.update(0.016, kenGroup);
+      gameLoop.scoreManager.update(0.016);
+
+      expect(catchEvents.length).toBe(1);
+      expect(catchFlow.state).toBe('catching');
+
+      // Continue past 0.84 s (another 40 frames)
+      for (let i = 0; i < 40; i++) {
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+      }
+
+      // No miss should have been produced
+      expect(missEvents.length).toBe(0);
+    });
+
+    describe('Flight-end clamp & pre-clamp catch evaluation', () => {
+      it('on the landing tick, evaluateCatch receives a non-zero downward velocity', () => {
+        let evaluatedVelocityOnLanding = null;
+        vi.spyOn(detector, 'evaluateCatch').mockImplementation((pos, vel) => {
+          if (!gameLoop.trajectory.isAirborne) {
+            evaluatedVelocityOnLanding = { ...vel };
+          }
+          return { confirmed: false, valid: false, reason: 'out_of_range' };
+        });
+
+        gameLoop.launchBall();
+
+        // Run until landing tick (53 frames * 0.016 s = 0.848 s >= FLIGHT_DURATION)
+        for (let i = 0; i < 53; i++) {
+          gameLoop.catchDetector.update(0.016, kenGroup);
+          gameLoop.scoreManager.update(0.016);
+        }
+
+        expect(evaluatedVelocityOnLanding).not.toBeNull();
+        expect(evaluatedVelocityOnLanding.y).toBeLessThan(0);
+        expect(Math.abs(evaluatedVelocityOnLanding.y - (-1.0488))).toBeLessThan(0.001);
+      });
+
+      it('a catch whose all checks pass on the landing tick is confirmed (catch beats the expiry miss)', () => {
+        const catchEvents = [];
+        const missEvents = [];
+        eventBus.on(Events.CATCH, (evt) => catchEvents.push(evt));
+        eventBus.on(Events.MISS, (evt) => missEvents.push(evt));
+
+        gameLoop.launchBall();
+
+        // 52 ticks in air away from cup
+        for (let i = 0; i < 52; i++) {
+          gameLoop.catchDetector.update(0.016, kenGroup);
+          gameLoop.scoreManager.update(0.016);
+        }
+
+        // On landing tick (tick 53), evaluateCatch confirms catch
+        vi.spyOn(detector, 'evaluateCatch').mockReturnValue({
+          confirmed: true,
+          valid: true,
+          cupKey: CupKey.BIG_CUP,
+          catchType: 'clean',
+          details: { distance: 0.005, relativeSpeed: 0.1, approachDot: 0.98 },
+        });
+
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+
+        expect(catchEvents.length).toBe(1);
+        expect(missEvents.length).toBe(0);
+        expect(catchFlow.state).toBe('catching');
+      });
+
+      it('after landing with no catch exactly one MISS', () => {
+        const missEvents = [];
+        eventBus.on(Events.MISS, (evt) => missEvents.push(evt));
+
+        gameLoop.launchBall();
+
+        // Run past landing
+        for (let i = 0; i < 60; i++) {
+          gameLoop.catchDetector.update(0.016, kenGroup);
+          gameLoop.scoreManager.update(0.016);
+        }
+
+        expect(missEvents.length).toBe(1);
+        expect(catchFlow.state).toBe('seated');
+      });
+
+      it('velocity passed to the detector is identical whether the final tick lands slightly before or after FLIGHT_DURATION (test with dt = 1/60, 1/72, 1/90)', () => {
+        const dts = [1 / 60, 1 / 72, 1 / 90];
+        const landingVelocities = [];
+
+        for (const dt of dts) {
+          const freshBus = new EventBus();
+          const freshDetector = new KendamaInputAndDetector({ gameplayKenGroup: kenGroup });
+          const freshFlow = new CatchFlow();
+          const loop = new GameLoop({
+            eventBus: freshBus,
+            kenGroup,
+            detector: freshDetector,
+            catchFlow: freshFlow,
+          });
+
+          let capturedLandingVel = null;
+          vi.spyOn(freshDetector, 'evaluateCatch').mockImplementation((pos, vel) => {
+            if (!loop.trajectory.isAirborne) {
+              capturedLandingVel = { ...vel };
+            }
+            return { confirmed: false, valid: false, reason: 'out_of_range' };
+          });
+
+          loop.launchBall();
+
+          // Step until trajectory lands
+          for (let step = 0; step < 120; step++) {
+            loop.catchDetector.update(dt, kenGroup);
+            loop.scoreManager.update(dt);
+            if (!loop.trajectory.isAirborne && capturedLandingVel) {
+              break;
+            }
+          }
+
+          expect(capturedLandingVel).not.toBeNull();
+          landingVelocities.push(capturedLandingVel.y);
+        }
+
+        expect(landingVelocities.length).toBe(3);
+        expect(landingVelocities[0]).toBeLessThan(0);
+        expect(landingVelocities[0]).toBeCloseTo(landingVelocities[1], 5);
+        expect(landingVelocities[1]).toBeCloseTo(landingVelocities[2], 5);
+      });
+    });
+
+    // ========================================================================
+    // O. 2x Wrist-Roll Amplification Integration
+    // ========================================================================
+    describe('O. 2x Wrist-Roll Amplification Integration', () => {
+      it('GameLoop constructor initializes rollGain with DEFAULT_ROLL_GAIN (2.0) or custom option', () => {
+        const defaultLoop = new GameLoop({ gameplayKenGroup: kenGroup });
+        expect(defaultLoop.rollGain).toBe(2.0);
+
+        const customLoop = new GameLoop({ gameplayKenGroup: kenGroup, rollGain: 1.5 });
+        expect(customLoop.rollGain).toBe(1.5);
+      });
+
+      it('Hand input branch amplifies wrist twist angle by rollGain (30 deg twist -> 60 deg twist)', () => {
+        const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+        const loop = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: adapter,
+          rollGain: 2.0,
+        });
+
+        const q30 = {
+          x: 0,
+          y: 0,
+          z: Math.sin(Math.PI / 12),
+          w: Math.cos(Math.PI / 12),
+        };
+
+        loop.inputSystem.update(0.016, {
+          wrist: {
+            position: { x: 0.1, y: 1.25, z: -0.45 },
+            quaternion: q30,
+            valid: true,
+          },
+        });
+
+        expect(loop.lastRawTwistDeg).toBeCloseTo(30, 4);
+        expect(loop.lastAmplifiedTwistDeg).toBeCloseTo(60, 4);
+
+        const expected60 = {
+          z: Math.sin(Math.PI / 6),
+          w: Math.cos(Math.PI / 6),
+        };
+        expect(kenGroup.quaternion.x).toBeCloseTo(0, 5);
+        expect(kenGroup.quaternion.y).toBeCloseTo(0, 5);
+        expect(kenGroup.quaternion.z).toBeCloseTo(expected60.z, 5);
+        expect(kenGroup.quaternion.w).toBeCloseTo(expected60.w, 5);
+      });
+
+      it('FakeInput path is unchanged (bypasses wrist roll amplification)', () => {
+        const fakeInput = new FakeInput({ autoRoll: false });
+        fakeInput._rollAngle = Math.PI / 6; // 30 deg roll
+
+        const loopWithFake = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: fakeInput,
+          rollGain: 2.0,
+        });
+
+        loopWithFake.inputSystem.update(0.016);
+
+        // FakeInput quaternion copied directly without amplification (remains 30 deg, NOT amplified to 60 deg)
+        const expected30 = {
+          z: Math.sin(Math.PI / 12),
+          w: Math.cos(Math.PI / 12),
+        };
+        expect(kenGroup.quaternion.z).toBeCloseTo(expected30.z, 5);
+        expect(kenGroup.quaternion.w).toBeCloseTo(expected30.w, 5);
+      });
+
+      it('Tracking loss still freezes gameplayKenGroup and resets PoseFilter', () => {
+        const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+        const poseFilter = new PoseFilter();
+        const loop = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: adapter,
+          poseFilter,
+          rollGain: 2.0,
+        });
+
+        const q30 = {
+          x: 0,
+          y: 0,
+          z: Math.sin(Math.PI / 12),
+          w: Math.cos(Math.PI / 12),
+        };
+
+        // Frame 1: Valid tracking
+        loop.inputSystem.update(0.016, {
+          wrist: {
+            position: { x: 0.15, y: 1.25, z: -0.45 },
+            quaternion: q30,
+            valid: true,
+          },
+        });
+        expect(loop.isTrackingValid).toBe(true);
+        expect(poseFilter.isInitialized()).toBe(true);
+
+        const frozenX = kenGroup.position.x;
+        const frozenZ = kenGroup.quaternion.z;
+
+        // Frame 2: Tracking loss (null joints)
+        loop.inputSystem.update(0.016, null);
+        expect(loop.isTrackingValid).toBe(false);
+        expect(poseFilter.isInitialized()).toBe(false);
+
+        // Transform is frozen in place
+        expect(kenGroup.position.x).toBe(frozenX);
+        expect(kenGroup.quaternion.z).toBe(frozenZ);
+      });
     });
   });
 });
