@@ -34,7 +34,9 @@ export const Events = Object.freeze({
   PHYSICS: 'physics', // Emitted by Person B on N-body orbital step
   PLANET: 'planet',   // Emitted by Person B on planetary evolution state change
   BURN_START: 'burn_start', // Emitted by Person B on capture burn initiation
-  BURN_END: 'burn_end'      // Emitted by Person B on capture burn completion
+  BURN_END: 'burn_end',     // Emitted by Person B on capture burn completion
+  FINALE_TRIGGER: 'finale_trigger', // Emitted by Person B on Chapter 4 climax gold ignition
+  AUDIO_TRIGGER: 'audio_trigger'    // Emitted by Person B for one-shot audio cues
 });
 
 /**

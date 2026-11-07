@@ -34,6 +34,7 @@ export const MISSION_THRESHOLDS = Object.freeze({
   CHAPTER_1: 400,   // Gravitational Capture (~11-13 catches)
   CHAPTER_2: 1000,  // Binary Resonance (~17-20 catches)
   CHAPTER_3: 1700,  // The Slingshot (~20 catches)
+  CLIMAX: 1700,     // Finale chapter unlock threshold (~20 catches)
   FINALE: 2200      // Calibration Climax & Kintsugi Gold Ignition (~14-16 catches)
 });
 

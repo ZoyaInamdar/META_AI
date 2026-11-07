@@ -21,6 +21,7 @@ import { MissionState, PlanetState, Events } from '../contracts/Interfaces.js';
 import { MISSION_THRESHOLDS, CADENCE_CONFIG } from './missionConfig.js';
 import { TrickSequencer } from './TrickSequencer.js';
 import { applyProgradeImpulse } from '../physics/BinarySystem.js';
+import { FinaleManager } from '../physics/FinaleManager.js';
 
 export class MissionController {
   /**
@@ -29,6 +30,7 @@ export class MissionController {
    * @param {TrickSequencer} [options.trickSequencer=null] - Optional TrickSequencer instance
    * @param {Object} [options.orbitalEngine=null] - Optional OrbitalEngine instance for physics interventions
    * @param {Object} [options.binarySystem=null] - Optional BinarySystem instance
+   * @param {FinaleManager} [options.finaleManager=null] - Optional FinaleManager instance
    * @param {number} [options.smoothingLambda=5.0] - Exponential smoothing response coefficient
    */
   constructor(eventBus = null, options = {}) {
@@ -36,6 +38,7 @@ export class MissionController {
     this.trickSequencer = options.trickSequencer || new TrickSequencer(eventBus);
     this.orbitalEngine = options.orbitalEngine || null;
     this.binarySystem = options.binarySystem || null;
+    this.finaleManager = options.finaleManager || new FinaleManager(eventBus, { orbitalEngine: this.orbitalEngine });
     this.smoothingLambda = Number.isFinite(options.smoothingLambda) ? options.smoothingLambda : 5.0;
 
     // Mission State variables
@@ -166,7 +169,32 @@ export class MissionController {
 
     // Climax Ignition: boolean milestone unlocked at 2200 energy
     if (energy >= MISSION_THRESHOLDS.FINALE) {
-      this.isGoldIgnited = true;
+      if (!this.isGoldIgnited) {
+        this.isGoldIgnited = true;
+
+        if (this.eventBus && typeof this.eventBus.emit === 'function') {
+          const timestamp = Date.now();
+          this.eventBus.emit(Events.FINALE_TRIGGER || 'finale_trigger', {
+            isGoldIgnited: true,
+            timestamp
+          });
+          this.eventBus.emit(Events.AUDIO_TRIGGER || 'audio_trigger', {
+            cue: 'gold_ignition_chime'
+          });
+          this.eventBus.emit(Events.MISSION, {
+            chapter: this.chapter,
+            milestoneReached: true,
+            cosmicEnergy: this.cosmicEnergy,
+            targetEnergy: this.getChapterTargetEnergy(this.chapter),
+            isGoldIgnited: true,
+            timestamp
+          });
+        }
+
+        if (this.finaleManager) {
+          this.finaleManager.startChaosCycle(this.orbitalEngine);
+        }
+      }
     }
   }
 
@@ -238,6 +266,9 @@ export class MissionController {
    */
   setOrbitalEngine(orbitalEngine) {
     this.orbitalEngine = orbitalEngine;
+    if (this.finaleManager) {
+      this.finaleManager.setOrbitalEngine(orbitalEngine);
+    }
   }
 
   /**
@@ -348,6 +379,10 @@ export class MissionController {
       this.ringFormationAlpha = Math.min(1.0, Math.max(0.0, this.ringFormationAlpha));
     }
 
+    if (this.finaleManager) {
+      this.finaleManager.update(dt, this.orbitalEngine);
+    }
+
     const missionState = this.getMissionState();
     const planetState = this.getPlanetState();
 
@@ -390,6 +425,49 @@ export class MissionController {
   }
 
   /**
+   * Returns normalized finale progression [0.0, 1.0].
+   * @returns {number}
+   */
+  getFinaleProgress() {
+    return this.finaleManager ? this.finaleManager.getFinaleProgress() : (this.isGoldIgnited ? 1.0 : 0.0);
+  }
+
+  /**
+   * Returns current chaos intensity [0.0, 1.0].
+   * @returns {number}
+   */
+  getChaosIntensity() {
+    return this.finaleManager ? this.finaleManager.getChaosIntensity() : 0.0;
+  }
+
+  /**
+   * Returns whether the chaos perturbation cycle is currently active.
+   * @returns {boolean}
+   */
+  isChaosActive() {
+    return this.finaleManager ? this.finaleManager.isChaosActive() : false;
+  }
+
+  /**
+   * Triggers the 9-second chaos cycle directly.
+   * @returns {boolean}
+   */
+  startChaosCycle() {
+    if (this.finaleManager) {
+      return this.finaleManager.startChaosCycle(this.orbitalEngine);
+    }
+    return false;
+  }
+
+  /**
+   * Returns underlying FinaleManager instance.
+   * @returns {FinaleManager}
+   */
+  getFinaleManager() {
+    return this.finaleManager;
+  }
+
+  /**
    * Returns the current TargetState from the trick sequencer.
    * @returns {Object}
    */
@@ -422,6 +500,10 @@ export class MissionController {
 
     this.processedScoreEvents.clear();
     this.processedMissEvents.clear();
+
+    if (this.finaleManager) {
+      this.finaleManager.reset();
+    }
 
     this.trickSequencer.reset();
   }
