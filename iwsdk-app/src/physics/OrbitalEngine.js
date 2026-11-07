@@ -108,6 +108,7 @@ export class OrbitalEngine {
     this.totalSteps = 0;
     this.adaptiveSubstepping = options.adaptiveSubstepping !== false;
     this._minSeparation = Infinity;
+    this.profiler = options.profiler || null;
   }
 
   // ==========================================================================
@@ -434,16 +435,60 @@ export class OrbitalEngine {
   /**
    * Main integration tick alias used by main.js pipeline.
    * Uses adaptive substepping when enabled (default); otherwise runs single RK4 step.
+   * Instruments performance via attached PhysicsProfiler when enabled.
    *
    * @param {number} dt - Delta time in seconds
    */
   step(dt) {
+    const hasProfiler = this.profiler && this.profiler.enabled;
+    if (hasProfiler) {
+      this.profiler.startFrame();
+    }
+
     if (this.adaptiveSubstepping) {
       this.stepAdaptive(dt);
     } else {
       this.substeps = 1;
       this.stepRK4(dt);
     }
+
+    if (hasProfiler) {
+      this.profiler.endFrame(this.substeps);
+    }
+  }
+
+  /**
+   * Authoritative frame update tick alias for step(dt).
+   * @param {number} dt - Timestep in seconds
+   */
+  update(dt) {
+    this.step(dt);
+  }
+
+  /**
+   * Attaches or updates a PhysicsProfiler.
+   * @param {Object|null} profiler
+   */
+  setProfiler(profiler) {
+    this.profiler = profiler;
+  }
+
+  /**
+   * Returns currently attached PhysicsProfiler.
+   * @returns {Object|null}
+   */
+  getProfiler() {
+    return this.profiler;
+  }
+
+  /**
+   * Diagnostic contract: returns current performance metrics from attached profiler.
+   * @returns {{ avgMs: number, p99Ms: number, maxMs: number, currentSubsteps: number }|null}
+   */
+  getPhysicsMetrics() {
+    return this.profiler && typeof this.profiler.getPhysicsMetrics === 'function'
+      ? this.profiler.getPhysicsMetrics()
+      : null;
   }
 
   /**
