@@ -712,4 +712,86 @@ describe('debugScene Module', () => {
 
     debugSpike.cleanup();
   });
+
+  it('18. logs [DEBUG FinalTickBallCup] on landing tick and includes landing tick in [DEBUG Closest]', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    mockKenGroup.name = 'gameplayKenGroup';
+    mockKenGroup.position.set(0.0, 1.25, -0.45);
+    mockKenGroup.updateMatrixWorld(true);
+
+    mockGameLoop.activeTargetCup = 'big';
+    mockGameLoop.lastDt = 0.016;
+    mockGameLoop.trajectory = {
+      flightId: 7,
+      elapsed: 0.839,
+      flightDuration: 0.8390,
+      state: { velocity: { x: 0, y: -0.1, z: 0 } },
+    };
+    mockGameLoop.lastEvaluatedBallPosition = { x: 0.06075, y: 1.25, z: -0.45 };
+    mockGameLoop.detector = {
+      gameplayKenGroup: mockKenGroup,
+      evaluateCatch: vi.fn(),
+    };
+
+    const result = setupDebugScene({
+      world: mockWorld,
+      game: mockGame,
+      gameLoop: mockGameLoop,
+      debug: true,
+      target: 'big',
+    });
+
+    // Launch with vy > 0 (going up, should not count towards closest)
+    mockGameLoop.trajectory.state.velocity.y = 1.0;
+    mockGameLoop.lastCatchEvaluation = {
+      details: {
+        distance: 0.001,
+        assistedRadius: 0.06,
+        cleanRadius: 0.04,
+        cupWorldPosition: { x: 0.06075, y: 1.25, z: -0.45 },
+      },
+      valid: true,
+    };
+    result.onFrame({ position: { x: 0.06075, y: 1.25, z: -0.45 }, mode: 'air' });
+
+    // Mid-air tick with vy < 0 and distance = 0.05
+    mockGameLoop.trajectory.state.velocity.y = -0.5;
+    mockGameLoop.lastCatchEvaluation = {
+      details: {
+        distance: 0.05,
+        assistedRadius: 0.06,
+        cleanRadius: 0.04,
+        cupWorldPosition: { x: 0.06075, y: 1.25, z: -0.45 },
+      },
+      valid: true,
+    };
+    result.onFrame({ position: { x: 0.06075, y: 1.30, z: -0.45 }, mode: 'air' });
+
+    // Landing tick where landing distance is 0.01 (closer than mid-air 0.05)
+    mockGameLoop.lastCatchEvaluation = {
+      details: {
+        distance: 0.01,
+        assistedRadius: 0.06,
+        cleanRadius: 0.04,
+        cupWorldPosition: { x: 0.06075, y: 1.25, z: -0.45 },
+      },
+      valid: true,
+    };
+
+    consoleSpy.mockClear();
+    result.onFrame({ position: { x: 0.06075, y: 1.25, z: -0.45 }, mode: 'seated' });
+
+    // Verify [DEBUG FinalTickBallCup] log
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG FinalTickBallCup] flight: 7 | target: big | ballPos: (0.0607, 1.2500, -0.4500) | cupPos: (0.0607, 1.2500, -0.4500) | group: gameplayKenGroup (matrixWorldUpdated: yes)')
+    );
+
+    // Verify [DEBUG Closest] captured landing tick (0.0100m at t=0.839s)
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG Closest] flight: 7 | target: big | minDistance: 0.0100m at t=0.839s')
+    );
+
+    result.cleanup();
+  });
 });

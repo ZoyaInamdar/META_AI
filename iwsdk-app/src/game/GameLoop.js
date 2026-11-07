@@ -105,6 +105,7 @@ export class GameLoop {
     this.activeTargetCup = this.targetOverride || initialCup;
     this._isTrackingValid = true;
     this.lastEvaluatedVelocity = null;
+    this.lastEvaluatedBallPosition = null;
 
     // WebXR context references for wrist joint extraction
     this.referenceSpace = options.referenceSpace || null;
@@ -378,6 +379,7 @@ export class GameLoop {
       const nowSec = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
 
       this.lastEvaluatedVelocity = ballVel ? { ...ballVel } : { x: 0, y: 0, z: 0 };
+      this.lastEvaluatedBallPosition = ballPos ? { ...ballPos } : { x: 0, y: 0, z: 0 };
 
       const evalRes = this.detector.evaluateCatch(
         ballPos,

@@ -450,6 +450,8 @@ export function setupDebugScene(options = {}) {
 
     // Detect flight end (Final tick / transition out of 'air')
     if (prevBallMode === 'air' && currentMode !== 'air') {
+      const evalRes = gameLoop?.lastCatchEvaluation;
+
       // Item 3: Log target cup normal/position & Ken euler degrees on the final tick
       const cupPose = getCupWorldPose(activeCup, kenGroup);
       const kenRot = getKenEulerDeg(kenGroup);
@@ -467,10 +469,59 @@ export function setupDebugScene(options = {}) {
         `evalVel: (${evalVel.x.toFixed(4)}, ${evalVel.y.toFixed(4)}, ${evalVel.z.toFixed(4)}) [${clampType}]`
       );
 
+      // Final tick ball & cup diagnostic: ball pos, detector cup pos, group/matrix, world & local ball->cup vectors
+      const evalBallPos = gameLoop?.lastEvaluatedBallPosition ?? gameLoop?.catchFlow?.ballPosition ?? ballState?.position ?? { x: 0, y: 0, z: 0 };
+      const detectorCupPos = evalRes?.details?.cupWorldPosition ?? cupPose.position;
+      const detectorGroup = gameLoop?.detector?.gameplayKenGroup ?? kenGroup;
+      const groupName = detectorGroup?.name || 'gameplayKenGroup';
+      const hasMatrix = Boolean(detectorGroup?.matrixWorld && (detectorGroup.matrixWorld.elements?.length >= 16 || Array.isArray(detectorGroup.matrixWorld)));
+      const isMatrixUpdated = hasMatrix;
+
+      const vWorld = {
+        x: detectorCupPos.x - evalBallPos.x,
+        y: detectorCupPos.y - evalBallPos.y,
+        z: detectorCupPos.z - evalBallPos.z,
+      };
+
+      const kenQuat = detectorGroup?.quaternion || kenGroup?.quaternion || { x: 0, y: 0, z: 0, w: 1 };
+      const invQuat = {
+        x: -(kenQuat.x ?? 0),
+        y: -(kenQuat.y ?? 0),
+        z: -(kenQuat.z ?? 0),
+        w: kenQuat.w ?? 1,
+      };
+      const vLocal = rotateVectorByQuat(vWorld, invQuat);
+      const landingDist = evalRes?.details?.distance ?? Math.hypot(vWorld.x, vWorld.y, vWorld.z);
+
+      console.log(
+        `[DEBUG FinalTickBallCup] flight: ${activeFlightId ?? currentFlightId} | target: ${activeCup} | ` +
+        `ballPos: (${evalBallPos.x.toFixed(4)}, ${evalBallPos.y.toFixed(4)}, ${evalBallPos.z.toFixed(4)}) | ` +
+        `cupPos: (${detectorCupPos.x.toFixed(4)}, ${detectorCupPos.y.toFixed(4)}, ${detectorCupPos.z.toFixed(4)}) | ` +
+        `group: ${groupName} (matrixWorldUpdated: ${isMatrixUpdated ? 'yes' : 'no'}) | ` +
+        `vecWorld: (${vWorld.x.toFixed(4)}, ${vWorld.y.toFixed(4)}, ${vWorld.z.toFixed(4)}) | ` +
+        `vecLocal: (${vLocal.x.toFixed(4)}, ${vLocal.y.toFixed(4)}, ${vLocal.z.toFixed(4)}) | ` +
+        `dist: ${landingDist.toFixed(4)}m`
+      );
+
+      // Fix [DEBUG Closest] metric & dwell counters so they include the landing tick (Item 3)
+      if (Number.isFinite(landingDist)) {
+        const assistR = evalRes?.details?.assistedRadius ?? 0.06;
+        const cleanR = evalRes?.details?.cleanRadius ?? 0.04;
+        if (landingDist <= assistR) {
+          ticksInsideAssist++;
+        }
+        if (landingDist <= cleanR) {
+          ticksInsideClean++;
+        }
+        if (landingDist < flightMinDistance) {
+          flightMinDistance = landingDist;
+          flightMinDistanceTime = elapsed;
+        }
+      }
+
       // Item 2: Log final tick target evaluation if not already logged
       if (!loggedTicksForFlight.has(0)) {
         loggedTicksForFlight.add(0);
-        const evalRes = gameLoop?.lastCatchEvaluation;
         const cleanR = evalRes?.details?.cleanRadius ?? 0.04;
         const assistR = evalRes?.details?.assistedRadius ?? 0.06;
         const approachDot = evalRes?.details?.approachDot ?? 0.0;
@@ -482,7 +533,7 @@ export function setupDebugScene(options = {}) {
         const confirmed = Boolean(evalRes?.confirmed);
         const valid = Boolean(evalRes?.valid);
         const confirmCount = evalRes?.confirmationCount ?? 0;
-        const dist = evalRes?.details?.distance ?? flightMinDistance;
+        const dist = evalRes?.details?.distance ?? landingDist;
 
         console.log(
           `[DEBUG TargetEval Final] flight: ${activeFlightId ?? currentFlightId} | target: ${activeCup} | ` +
