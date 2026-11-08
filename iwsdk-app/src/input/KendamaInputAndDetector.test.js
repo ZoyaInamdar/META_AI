@@ -227,7 +227,7 @@ describe('KendamaInputAndDetector Module', () => {
         assert.ok(Math.abs(ORIENTATION_THRESHOLDS.bigCup.maxAngleDeg - 40.0) < 1e-4);
         assert.ok(Math.abs(ORIENTATION_THRESHOLDS.smallCup.maxAngleDeg - 40.0) < 1e-4);
         assert.ok(Math.abs(ORIENTATION_THRESHOLDS.baseCup.maxAngleDeg - 40.0) < 1e-4);
-        assert.ok(Math.abs(ORIENTATION_THRESHOLDS.spike.maxAngleDeg - 18.0) < 1e-4);
+        assert.ok(Math.abs(ORIENTATION_THRESHOLDS.spike.maxAngleDeg - 28.0) < 1e-4);
 
         // Spike upright test (Spike points +Y, angle with world up is 0 deg <= 18 deg)
         const mockKenUpright = createMockKenGroup();

@@ -208,7 +208,7 @@ const REAL_CUPS = {
         localNormal: { x: 0.0, y: 1.0, z: 0.0 },
         rimRadius: 0.0,
         depth: 0.0,
-        minDot: Math.cos(18.0 * (Math.PI / 180)),
+        minDot: Math.cos(28.0 * (Math.PI / 180)),
         cleanRadius: 0.016,
         assistRadius: 0.035,
         maxRelSpeed: 2.5,
