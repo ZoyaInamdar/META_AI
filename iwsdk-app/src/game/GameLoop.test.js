@@ -2037,5 +2037,228 @@ describe('GameLoop (Person A)', () => {
         expect(kenGroup.quaternion.z).toBe(frozenZ);
       });
     });
+
+    // ========================================================================
+    // P. Separate Wrist-Pitch Amplification Integration (Base Cup Only)
+    // ========================================================================
+    describe('P. Separate Wrist-Pitch Amplification Integration (Base Cup Only)', () => {
+      it('GameLoop constructor initializes pitchGain and currentEffectivePitchGain', () => {
+        const defaultLoop = new GameLoop({ gameplayKenGroup: kenGroup });
+        expect(defaultLoop.pitchGain).toBe(2.0);
+        // Default target is 'big' (non-base), so effective gain starts at 1.0
+        expect(defaultLoop.currentEffectivePitchGain).toBe(1.0);
+
+        const baseLoop = new GameLoop({ gameplayKenGroup: kenGroup, target: 'base' });
+        expect(baseLoop.activeTargetCup).toBe('base');
+        expect(baseLoop.currentEffectivePitchGain).toBe(2.0);
+
+        const customLoop = new GameLoop({ gameplayKenGroup: kenGroup, pitchGain: 2.5, target: 'base' });
+        expect(customLoop.pitchGain).toBe(2.5);
+        expect(customLoop.currentEffectivePitchGain).toBe(2.5);
+      });
+
+      it('amplifies pitch ONLY when activeTargetCup is base (45 deg pitch -> 90 deg pitch)', () => {
+        const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+        const loop = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: adapter,
+          target: 'base',
+          pitchGain: 2.0,
+        });
+
+        const q45Pitch = {
+          x: Math.sin(Math.PI / 8),
+          y: 0,
+          z: 0,
+          w: Math.cos(Math.PI / 8),
+        };
+
+        loop.inputSystem.update(0.016, {
+          wrist: {
+            position: { x: 0.1, y: 1.25, z: -0.45 },
+            quaternion: q45Pitch,
+            valid: true,
+          },
+        });
+
+        expect(loop.lastRawPitchDeg).toBeCloseTo(45, 3);
+        expect(loop.lastAmplifiedPitchDeg).toBeCloseTo(90, 3);
+
+        const expected90Pitch = {
+          x: Math.sin(Math.PI / 4),
+          y: 0,
+          z: 0,
+          w: Math.cos(Math.PI / 4),
+        };
+        expect(kenGroup.quaternion.x).toBeCloseTo(expected90Pitch.x, 5);
+        expect(kenGroup.quaternion.y).toBeCloseTo(0, 5);
+        expect(kenGroup.quaternion.z).toBeCloseTo(0, 5);
+        expect(kenGroup.quaternion.w).toBeCloseTo(expected90Pitch.w, 5);
+      });
+
+      it('does NOT amplify pitch when activeTargetCup is non-base (e.g. big, small, spike)', () => {
+        const nonBaseTargets = ['big', 'small', 'spike'];
+
+        for (const target of nonBaseTargets) {
+          const freshKenGroup = createMockKenGroup();
+          const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+          const loop = new GameLoop({
+            eventBus,
+            gameplayKenGroup: freshKenGroup,
+            inputSource: adapter,
+            target,
+            pitchGain: 2.0,
+          });
+
+          const q45Pitch = {
+            x: Math.sin(Math.PI / 8),
+            y: 0,
+            z: 0,
+            w: Math.cos(Math.PI / 8),
+          };
+
+          loop.inputSystem.update(0.016, {
+            wrist: {
+              position: { x: 0.1, y: 1.25, z: -0.45 },
+              quaternion: q45Pitch,
+              valid: true,
+            },
+          });
+
+          expect(loop.currentEffectivePitchGain).toBe(1.0);
+          expect(loop.lastRawPitchDeg).toBeCloseTo(45, 3);
+          expect(loop.lastAmplifiedPitchDeg).toBeCloseTo(45, 3); // Unamplified
+
+          expect(freshKenGroup.quaternion.x).toBeCloseTo(q45Pitch.x, 5);
+          expect(freshKenGroup.quaternion.w).toBeCloseTo(q45Pitch.w, 5);
+        }
+      });
+
+      it('switching target mid-pose changes effective pitch gain smoothly over ~200 ms and settles at correct value', () => {
+        const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+        const loop = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: adapter,
+          target: 'big',
+          pitchGain: 2.0,
+        });
+
+        const q45Pitch = {
+          x: Math.sin(Math.PI / 8),
+          y: 0,
+          z: 0,
+          w: Math.cos(Math.PI / 8),
+        };
+
+        const frame = {
+          wrist: {
+            position: { x: 0.1, y: 1.25, z: -0.45 },
+            quaternion: q45Pitch,
+            valid: true,
+          },
+        };
+
+        // Initially target is big: effective gain is 1.0, output pitch is 45 deg
+        loop.inputSystem.update(0.016, frame);
+        expect(loop.currentEffectivePitchGain).toBeCloseTo(1.0, 4);
+        expect(loop.lastAmplifiedPitchDeg).toBeCloseTo(45.0, 2);
+
+        // Switch target to base mid-pose
+        loop.activeTargetCup = 'base';
+
+        // Advance 50 ms (0.05 s) -> 25% of 200ms blend: gain increases smoothly
+        loop.inputSystem.update(0.05, frame);
+        expect(loop.currentEffectivePitchGain).toBeGreaterThan(1.2);
+        expect(loop.currentEffectivePitchGain).toBeLessThan(1.3);
+        expect(loop.lastAmplifiedPitchDeg).toBeGreaterThan(45.0);
+        expect(loop.lastAmplifiedPitchDeg).toBeLessThan(60.0);
+
+        // Advance another 50 ms (0.05 s) -> 50% of 200ms blend: gain around 1.5
+        loop.inputSystem.update(0.05, frame);
+        expect(loop.currentEffectivePitchGain).toBeCloseTo(1.5, 2);
+        expect(loop.lastAmplifiedPitchDeg).toBeCloseTo(45.0 * 1.5, 2);
+
+        // Advance 120 ms (0.12 s) -> total time > 200ms: gain reaches 2.0 and settles
+        loop.inputSystem.update(0.12, frame);
+        expect(loop.currentEffectivePitchGain).toBeCloseTo(2.0, 4);
+        expect(loop.lastAmplifiedPitchDeg).toBeCloseTo(90.0, 2);
+
+        // Subsequent ticks stay settled at 2.0
+        loop.inputSystem.update(0.016, frame);
+        expect(loop.currentEffectivePitchGain).toBeCloseTo(2.0, 4);
+        expect(loop.lastAmplifiedPitchDeg).toBeCloseTo(90.0, 2);
+      });
+
+      it('FakeInput path is unchanged (bypasses wrist pitch amplification)', () => {
+        const fakeInput = new FakeInput({ autoRoll: false });
+        const loopWithFake = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: fakeInput,
+          target: 'base',
+          pitchGain: 2.0,
+        });
+
+        const q45Pitch = {
+          x: Math.sin(Math.PI / 8),
+          y: 0,
+          z: 0,
+          w: Math.cos(Math.PI / 8),
+        };
+        fakeInput.update = () => {
+          fakeInput.gameplayKenGroup.quaternion.x = q45Pitch.x;
+          fakeInput.gameplayKenGroup.quaternion.y = 0;
+          fakeInput.gameplayKenGroup.quaternion.z = 0;
+          fakeInput.gameplayKenGroup.quaternion.w = q45Pitch.w;
+        };
+
+        loopWithFake.inputSystem.update(0.016);
+
+        expect(kenGroup.quaternion.x).toBeCloseTo(q45Pitch.x, 5);
+        expect(kenGroup.quaternion.w).toBeCloseTo(q45Pitch.w, 5);
+      });
+
+      it('Tracking loss still freezes gameplayKenGroup when pitch amplification is active', () => {
+        const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+        const poseFilter = new PoseFilter();
+        const loop = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: adapter,
+          poseFilter,
+          target: 'base',
+          pitchGain: 2.0,
+        });
+
+        const q45Pitch = {
+          x: Math.sin(Math.PI / 8),
+          y: 0,
+          z: 0,
+          w: Math.cos(Math.PI / 8),
+        };
+
+        // Frame 1: Valid tracking
+        loop.inputSystem.update(0.016, {
+          wrist: {
+            position: { x: 0.15, y: 1.25, z: -0.45 },
+            quaternion: q45Pitch,
+            valid: true,
+          },
+        });
+        expect(loop.isTrackingValid).toBe(true);
+
+        const frozenX = kenGroup.position.x;
+        const frozenQuatX = kenGroup.quaternion.x;
+
+        // Frame 2: Tracking loss
+        loop.inputSystem.update(0.016, null);
+        expect(loop.isTrackingValid).toBe(false);
+
+        expect(kenGroup.position.x).toBe(frozenX);
+        expect(kenGroup.quaternion.x).toBe(frozenQuatX);
+      });
+    });
   });
 });

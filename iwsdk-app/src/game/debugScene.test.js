@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as THREE from 'three';
-import { setupDebugScene, isDebugMode, getTargetOverride, getRollGainOverride } from './debugScene.js';
+import { setupDebugScene, isDebugMode, getTargetOverride, getRollGainOverride, getPitchGainOverride } from './debugScene.js';
 import { CatchFlow, computeCupWorldSeatPoint } from './CatchFlow.js';
 import { BALL_RADIUS } from '../input/cupConfigs.js';
 import { EventBus } from '../contracts/EventBus.js';
@@ -918,6 +918,55 @@ describe('debugScene Module', () => {
     );
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('[DEBUG CupReq] cup: spike | localNorm: (0.0, 1.0, 0.0) | alignThresh: -0.2 (dot < -0.2) | orientThresh: <= 18.0° (dotUp >= 0.9511)')
+    );
+
+    result.cleanup();
+  });
+
+  it('22. setupDebugScene supports ?pitchGain=N override and logs pitchGain & pitchDeg in [DEBUG Launch]', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    mockKenGroup.position.set(0.0, 1.25, -0.45);
+    mockKenGroup.quaternion.set(Math.sin(Math.PI / 8), 0, 0, Math.cos(Math.PI / 8)); // 45 deg pitch
+    mockGameLoop.pitchGain = 2.0;
+    mockGameLoop.activeTargetCup = 'base';
+    mockGameLoop.currentEffectivePitchGain = 2.0;
+    mockGameLoop.lastRawPitchDeg = 45.0;
+    mockGameLoop.lastAmplifiedPitchDeg = 90.0;
+
+    // Test getPitchGainOverride with window.location
+    const originalWindow = globalThis.window;
+    try {
+      globalThis.window = { location: { search: '?debug&pitchGain=2.5' } };
+      expect(getPitchGainOverride()).toBe(2.5);
+    } finally {
+      if (originalWindow !== undefined) {
+        globalThis.window = originalWindow;
+      } else {
+        delete globalThis.window;
+      }
+    }
+
+    const result = setupDebugScene({
+      world: mockWorld,
+      game: mockGame,
+      gameLoop: mockGameLoop,
+      debug: true,
+      pitchGain: 2.5,
+    });
+
+    // Check that gameLoop.pitchGain was overridden to 2.5
+    expect(mockGameLoop.pitchGain).toBe(2.5);
+    expect(mockGameLoop.currentEffectivePitchGain).toBe(2.5);
+
+    // Trigger launch frame
+    result.onFrame({ position: { x: 0, y: 1.25, z: -0.45 }, mode: 'air' });
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG Launch] flight:')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('| pitchGain: 2.50 | pitchDeg: (raw: 45.00°, amp: 90.00°)')
     );
 
     result.cleanup();

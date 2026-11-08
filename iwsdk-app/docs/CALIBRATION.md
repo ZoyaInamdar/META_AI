@@ -12,3 +12,9 @@ All values from the IWSDK emulator; real-Quest numbers still to be measured.
 Other settings: rollGain 2.0, twist clamp +/-150 deg, deadzone 2 deg,
 pinch close 2.0 cm / open 3.5 cm (off hand), assist/clean radii in cupConfigs.js.
 Known limits: clean-vs-assisted depends on frame timing (emulator runs 20-60 FPS).
+
+| Base | 40 deg | dot < -0.2 | pitch flip about the crossbar (local X); only when target = base | pitchGain 2.0, clamp +/-180 deg | CATCH (ASSISTED) at raw 122 deg -> amp 180 (clamped); MISS at gain 1.0 with raw 96 deg (cupNorm Y 0.23) |
+
+Pitch gain note: the Base Cup needs >= ~140 deg of cup rotation (40 deg tolerance), so
+gain 2.0 needs ~70 deg real flip; to be tuned on the headset (try 2.5-3.0).
+Spike tolerance relaxed to 28 deg (was 18) by team decision (B + C).

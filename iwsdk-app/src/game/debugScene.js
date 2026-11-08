@@ -33,6 +33,7 @@ import { BALL_RADIUS, getCupConfig } from '../input/cupConfigs.js';
 import { Events } from '../contracts/Interfaces.js';
 import { KendamaXRSystem } from './KendamaXRSystem.js';
 import { DEFAULT_ROLL_GAIN, decomposeSwingTwist } from '../input/wristRoll.js';
+import { DEFAULT_PITCH_GAIN, decomposePitchTwist } from '../input/wristPitch.js';
 
 /**
  * Pure math helper to rotate a 3D vector by a quaternion without external dependencies.
@@ -220,6 +221,25 @@ export function getRollGainOverride() {
 }
 
 /**
+ * Resolves forced pitchGain override from `?pitchGain=N` URL query parameter.
+ * Active exclusively when debug mode is enabled and N is a finite number >= 0.
+ *
+ * @returns {number|null}
+ */
+export function getPitchGainOverride() {
+  if (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('debug') && params.has('pitchGain')) {
+      const val = parseFloat(params.get('pitchGain'));
+      if (Number.isFinite(val) && val >= 0) {
+        return val;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Initializes debug visuals and diagnostic logging if debug mode is active.
  *
  * @param {Object} [options={}]
@@ -293,6 +313,17 @@ export function setupDebugScene(options = {}) {
     : getRollGainOverride();
   if (rollGainOverride !== null && gameLoop) {
     gameLoop.rollGain = rollGainOverride;
+  }
+
+  // 3. Force pitchGain override if ?pitchGain=N is specified (debug only)
+  const pitchGainOverride = (options.pitchGain !== undefined && Number.isFinite(options.pitchGain) && options.pitchGain >= 0)
+    ? options.pitchGain
+    : getPitchGainOverride();
+  if (pitchGainOverride !== null && gameLoop) {
+    gameLoop.pitchGain = pitchGainOverride;
+    if (gameLoop.activeTargetCup === 'base') {
+      gameLoop.currentEffectivePitchGain = pitchGainOverride;
+    }
   }
 
   // One-time [DEBUG CupReq] diagnostic log at startup for each cup (Item 1)
@@ -412,10 +443,14 @@ export function setupDebugScene(options = {}) {
       }).join(', ');
 
       const rollGain = gameLoop?.rollGain ?? DEFAULT_ROLL_GAIN;
+      const pitchGain = gameLoop?.pitchGain ?? DEFAULT_PITCH_GAIN;
       const kenQuat = kenGroup?.quaternion || { x: 0, y: 0, z: 0, w: 1 };
       const twistInfo = decomposeSwingTwist(kenQuat);
       const rawTwistDeg = gameLoop?.lastRawTwistDeg ?? ((twistInfo.theta * 180) / Math.PI);
       const ampTwistDeg = gameLoop?.lastAmplifiedTwistDeg ?? ((twistInfo.theta * 180) / Math.PI);
+      const pitchInfo = decomposePitchTwist(twistInfo.swing);
+      const rawPitchDeg = gameLoop?.lastRawPitchDeg ?? ((pitchInfo.theta * 180) / Math.PI);
+      const ampPitchDeg = gameLoop?.lastAmplifiedPitchDeg ?? ((pitchInfo.theta * 180) / Math.PI);
 
       console.log(
         `[DEBUG Launch] flight: ${currentFlightId} | target: ${activeCup} | seatCup: ${seatCup} | ` +
@@ -424,7 +459,8 @@ export function setupDebugScene(options = {}) {
         `cupNorm: (${cupPose.normal.x.toFixed(4)}, ${cupPose.normal.y.toFixed(4)}, ${cupPose.normal.z.toFixed(4)}) | ` +
         `kenRotDeg: (${kenRot.x.toFixed(2)}°, ${kenRot.y.toFixed(2)}°, ${kenRot.z.toFixed(2)}°) | ` +
         `cupDists: (${cupDists}) | ` +
-        `rollGain: ${rollGain.toFixed(2)} | twistDeg: (raw: ${rawTwistDeg.toFixed(2)}°, amp: ${ampTwistDeg.toFixed(2)}°)`
+        `rollGain: ${rollGain.toFixed(2)} | twistDeg: (raw: ${rawTwistDeg.toFixed(2)}°, amp: ${ampTwistDeg.toFixed(2)}°) | ` +
+        `pitchGain: ${pitchGain.toFixed(2)} | pitchDeg: (raw: ${rawPitchDeg.toFixed(2)}°, amp: ${ampPitchDeg.toFixed(2)}°)`
       );
     }
 
