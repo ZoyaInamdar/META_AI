@@ -115,6 +115,17 @@ export const BINARY_CONFIG = Object.freeze({
 });
 
 /**
+ * Authoritative Chapter 1 -> Chapter 2 Transition Configuration.
+ * Governs the 2.0s cubic Hermite smoothstep blend into the circumbinary resonance orbit.
+ */
+export const TRANSITION_CONFIG = Object.freeze({
+  DURATION: 2.0,
+  TARGET_POS: Object.freeze({ x: 0.0, y: 2.4, z: 0.0 }),
+  TARGET_VEL: Object.freeze({ x: -0.9128709291752769, y: 0.0, z: 0.0 }),
+  ALIGNMENT_THRESHOLD_DEG: 5.0
+});
+
+/**
  * Chapter 3 Deterministic Gravitational Slingshot Preset (Confirmed for Person C).
  * Discovered via parameter grid sweep in scripts/sim.js.
  */

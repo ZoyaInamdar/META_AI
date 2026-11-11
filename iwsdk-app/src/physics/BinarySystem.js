@@ -165,5 +165,134 @@ export class BinarySystem {
   applyProgradeImpulse(boostDeltaV = this.boostDeltaV) {
     return applyProgradeImpulse(this.orbitalEngine, this.planetIndex, boostDeltaV);
   }
+
+  /**
+   * Computes instantaneous three-body collinear alignment angle and flag.
+   * @param {Object} [options={}]
+   * @returns {{ isAligned: boolean, angleDegrees: number }}
+   */
+  getThreeBodyAlignment(options = {}) {
+    return computeThreeBodyAlignment(this.orbitalEngine, {
+      star1: 0,
+      star2: 1,
+      planet: this.planetIndex,
+      ...options
+    });
+  }
+}
+
+// Reusable static cache to ensure zero dynamic heap allocations in frame loop
+const _alignmentResult = {
+  isAligned: false,
+  angleDegrees: 180.0
+};
+
+/**
+ * Computes collinear three-body alignment between Star 1, Star 2, and the Planet.
+ * Completely zero-allocation: writes directly to a reusable cached result.
+ *
+ * @param {Object} orbitalEngine - OrbitalEngine instance
+ * @param {Object} [options={}]
+ * @param {number|string} [options.star1='star_1'] - Star 1 index or ID
+ * @param {number|string} [options.star2='star_2'] - Star 2 index or ID
+ * @param {number|string} [options.planet='planet'] - Planet index or ID
+ * @param {number} [options.thresholdDegrees=5.0] - Alignment threshold in degrees
+ * @returns {{ isAligned: boolean, angleDegrees: number }}
+ */
+export function computeThreeBodyAlignment(orbitalEngine, options = {}) {
+  if (!orbitalEngine) {
+    _alignmentResult.isAligned = false;
+    _alignmentResult.angleDegrees = 180.0;
+    return _alignmentResult;
+  }
+
+  const thresholdDeg = Number.isFinite(options.thresholdDegrees) ? options.thresholdDegrees : 5.0;
+
+  // Resolve Star 1
+  let s1Idx = options.star1 ?? 0;
+  if (typeof s1Idx === 'string') {
+    for (let i = 0; i < orbitalEngine.bodyCount; i++) {
+      if (orbitalEngine.active[i] && orbitalEngine.ids[i] === s1Idx) {
+        s1Idx = i;
+        break;
+      }
+    }
+  }
+
+  // Resolve Star 2
+  let s2Idx = options.star2 ?? 1;
+  if (typeof s2Idx === 'string') {
+    for (let i = 0; i < orbitalEngine.bodyCount; i++) {
+      if (orbitalEngine.active[i] && orbitalEngine.ids[i] === s2Idx) {
+        s2Idx = i;
+        break;
+      }
+    }
+  }
+
+  // Resolve Planet
+  let pIdx = options.planet ?? 2;
+  if (typeof pIdx === 'string') {
+    for (let i = 0; i < orbitalEngine.bodyCount; i++) {
+      if (orbitalEngine.active[i] && orbitalEngine.ids[i] === pIdx) {
+        pIdx = i;
+        break;
+      }
+    }
+  }
+
+  if (
+    typeof s1Idx !== 'number' || s1Idx < 0 || s1Idx >= orbitalEngine.maxBodies || !orbitalEngine.active[s1Idx] ||
+    typeof s2Idx !== 'number' || s2Idx < 0 || s2Idx >= orbitalEngine.maxBodies || !orbitalEngine.active[s2Idx] ||
+    typeof pIdx !== 'number' || pIdx < 0 || pIdx >= orbitalEngine.maxBodies || !orbitalEngine.active[pIdx]
+  ) {
+    _alignmentResult.isAligned = false;
+    _alignmentResult.angleDegrees = 180.0;
+    return _alignmentResult;
+  }
+
+  const s1 = s1Idx * 3;
+  const s2 = s2Idx * 3;
+  const pp = pIdx * 3;
+
+  // Vector between stars: u = Star 1 - Star 2
+  const ux = orbitalEngine.positions[s1] - orbitalEngine.positions[s2];
+  const uy = orbitalEngine.positions[s1 + 1] - orbitalEngine.positions[s2 + 1];
+  const uz = orbitalEngine.positions[s1 + 2] - orbitalEngine.positions[s2 + 2];
+  const uMag = Math.sqrt(ux * ux + uy * uy + uz * uz);
+
+  if (uMag < 1e-12) {
+    _alignmentResult.isAligned = false;
+    _alignmentResult.angleDegrees = 180.0;
+    return _alignmentResult;
+  }
+
+  // Midpoint of stars (barycenter): m = (Star 1 + Star 2) / 2
+  const mx = (orbitalEngine.positions[s1] + orbitalEngine.positions[s2]) * 0.5;
+  const my = (orbitalEngine.positions[s1 + 1] + orbitalEngine.positions[s2 + 1]) * 0.5;
+  const mz = (orbitalEngine.positions[s1 + 2] + orbitalEngine.positions[s2 + 2]) * 0.5;
+
+  // Vector from midpoint to planet: w = Planet - Midpoint
+  const wx = orbitalEngine.positions[pp] - mx;
+  const wy = orbitalEngine.positions[pp + 1] - my;
+  const wz = orbitalEngine.positions[pp + 2] - mz;
+  const wMag = Math.sqrt(wx * wx + wy * wy + wz * wz);
+
+  if (wMag < 1e-12) {
+    _alignmentResult.isAligned = false;
+    _alignmentResult.angleDegrees = 180.0;
+    return _alignmentResult;
+  }
+
+  // Absolute dot product to measure collinearity
+  const dot = (ux * wx + uy * wy + uz * wz) / (uMag * wMag);
+  const cosTheta = Math.min(1.0, Math.max(0.0, Math.abs(dot)));
+  const angleRad = Math.acos(cosTheta);
+  const angleDeg = angleRad * (180.0 / Math.PI);
+
+  _alignmentResult.angleDegrees = angleDeg;
+  _alignmentResult.isAligned = angleDeg < thresholdDeg;
+
+  return _alignmentResult;
 }
 

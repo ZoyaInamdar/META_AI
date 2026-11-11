@@ -86,6 +86,18 @@ export const BallMode = Object.freeze({
   CATCHING: 'catching'
 });
 
+/**
+ * Authoritative chapter transition states governing the Chapter 1 -> Chapter 2 handover.
+ * Owned & emitted by Person B (MissionController).
+ */
+export const ChapterTransitionState = Object.freeze({
+  CHAPTER_1_CAPTURE: 'CHAPTER_1_CAPTURE',
+  TRANSITION_TO_BINARY: 'TRANSITION_TO_BINARY',
+  BLENDING_1_TO_2: 'TRANSITION_TO_BINARY', // canonical alias
+  CHAPTER_2_RESONANCE: 'CHAPTER_2_RESONANCE',
+  CHAPTER_2_STABILIZED: 'CHAPTER_2_STABILIZED'
+});
+
 // ============================================================================
 // 2. TARGET STATE CONTRACT
 // ============================================================================
@@ -256,6 +268,9 @@ export class MissionState {
     this.milestoneReached = options.milestoneReached ?? options.milestoneUnlocked ?? false;
     this.milestoneUnlocked = this.milestoneReached;
     this.activeIntervention = options.activeIntervention ?? null;
+    this.chapterState = options.chapterState ?? ChapterTransitionState.CHAPTER_1_CAPTURE;
+    this.isTransitioning = options.isTransitioning ?? false;
+    this.transitionProgress = options.transitionProgress ?? 0.0;
   }
 }
 

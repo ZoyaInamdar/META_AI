@@ -17,11 +17,13 @@
  * 5. Coordination with TrickSequencer for target cup progression
  */
 
-import { MissionState, PlanetState, Events } from '../contracts/Interfaces.js';
-import { MISSION_THRESHOLDS, CADENCE_CONFIG } from './missionConfig.js';
+import { MissionState, PlanetState, Events, ChapterTransitionState } from '../contracts/Interfaces.js';
+import { MISSION_THRESHOLDS, CADENCE_CONFIG, TRANSITION_CONFIG } from './missionConfig.js';
 import { TrickSequencer } from './TrickSequencer.js';
-import { applyProgradeImpulse } from '../physics/BinarySystem.js';
+import { setupChapter2Binary, applyProgradeImpulse, computeThreeBodyAlignment } from '../physics/BinarySystem.js';
 import { FinaleManager } from '../physics/FinaleManager.js';
+
+export { ChapterTransitionState };
 
 export class MissionController {
   /**
@@ -32,6 +34,7 @@ export class MissionController {
    * @param {Object} [options.binarySystem=null] - Optional BinarySystem instance
    * @param {FinaleManager} [options.finaleManager=null] - Optional FinaleManager instance
    * @param {number} [options.smoothingLambda=5.0] - Exponential smoothing response coefficient
+   * @param {number} [options.transitionDuration=2.0] - Chapter 1 -> 2 transition duration in seconds
    */
   constructor(eventBus = null, options = {}) {
     this.eventBus = eventBus;
@@ -46,6 +49,31 @@ export class MissionController {
     this.chapter = 1;
     this.milestoneReached = false;
     this.activeIntervention = null;
+
+    // Chapter Transition State Machine (Phase 2C Step 4)
+    this.chapterState = ChapterTransitionState.CHAPTER_1_CAPTURE;
+    this.transitionDuration = Number.isFinite(options.transitionDuration)
+      ? options.transitionDuration
+      : (TRANSITION_CONFIG?.DURATION ?? 2.0);
+    this.transitionElapsed = 0.0;
+    this.transitionProgress = 0.0;
+    this._isTransitioning = false;
+    this.isThreeBodyAligned = false;
+    this._threeBodyAlignmentCache = { isAligned: false, angleDegrees: 180.0 };
+
+    // Zero-allocation pre-allocated scratch buffers for Hermite blending
+    this._blendStartPos = new Float64Array(3);
+    this._blendStartVel = new Float64Array(3);
+    this._blendTargetPos = new Float64Array([
+      TRANSITION_CONFIG?.TARGET_POS?.x ?? 0.0,
+      TRANSITION_CONFIG?.TARGET_POS?.y ?? 2.4,
+      TRANSITION_CONFIG?.TARGET_POS?.z ?? 0.0
+    ]);
+    this._blendTargetVel = new Float64Array([
+      TRANSITION_CONFIG?.TARGET_VEL?.x ?? -0.9128709291752769,
+      TRANSITION_CONFIG?.TARGET_VEL?.y ?? 0.0,
+      TRANSITION_CONFIG?.TARGET_VEL?.z ?? 0.0
+    ]);
 
     // Surface Scars & Miss Deduplication
     this.scarsCount = 0;
@@ -66,6 +94,119 @@ export class MissionController {
     this.atmosphereDensityTarget = 0.0;
     this.oceanFillLevelTarget = 0.0;
     this.ringFormationAlphaTarget = 0.0;
+  }
+
+  /**
+   * Helper to locate the active planet body index in orbitalEngine.
+   * Completely zero-allocation.
+   * @private
+   * @returns {number} Body index or -1 if not found
+   */
+  _findPlanetIndex() {
+    if (!this.orbitalEngine) return -1;
+    for (let i = 0; i < this.orbitalEngine.bodyCount; i++) {
+      if (this.orbitalEngine.active[i] && typeof this.orbitalEngine.ids[i] === 'string' &&
+          this.orbitalEngine.ids[i].toLowerCase() === 'planet') {
+        return i;
+      }
+    }
+    if (this.orbitalEngine.bodyCount >= 3 && this.orbitalEngine.active[2]) {
+      return 2;
+    }
+    if (this.orbitalEngine.bodyCount >= 2 && this.orbitalEngine.active[1]) {
+      return 1;
+    }
+    return -1;
+  }
+
+  /**
+   * Starts the 2.0-second cubic Hermite smoothstep transition from Chapter 1 to Chapter 2.
+   *
+   * @param {Object} [options={}]
+   * @param {{x: number, y: number, z: number}|Array<number>} [options.startPos]
+   * @param {{x: number, y: number, z: number}|Array<number>} [options.startVel]
+   * @param {{x: number, y: number, z: number}|Array<number>} [options.targetPos]
+   * @param {{x: number, y: number, z: number}|Array<number>} [options.targetVel]
+   */
+  startTransitionToBinary(options = {}) {
+    this.chapter = 2;
+    this.chapterState = ChapterTransitionState.TRANSITION_TO_BINARY;
+    this._isTransitioning = true;
+    this.transitionElapsed = 0.0;
+    this.transitionProgress = 0.0;
+    this.isThreeBodyAligned = false;
+
+    // Capture initial start pos and vel from orbitalEngine
+    let pIdx = this._findPlanetIndex();
+    if (this.orbitalEngine && pIdx !== -1) {
+      const i3 = pIdx * 3;
+      this._blendStartPos[0] = this.orbitalEngine.positions[i3];
+      this._blendStartPos[1] = this.orbitalEngine.positions[i3 + 1];
+      this._blendStartPos[2] = this.orbitalEngine.positions[i3 + 2];
+      this._blendStartVel[0] = this.orbitalEngine.velocities[i3];
+      this._blendStartVel[1] = this.orbitalEngine.velocities[i3 + 1];
+      this._blendStartVel[2] = this.orbitalEngine.velocities[i3 + 2];
+    }
+
+    if (options.startPos) {
+      this._blendStartPos[0] = options.startPos.x ?? options.startPos[0] ?? 0.0;
+      this._blendStartPos[1] = options.startPos.y ?? options.startPos[1] ?? 0.0;
+      this._blendStartPos[2] = options.startPos.z ?? options.startPos[2] ?? 0.0;
+    }
+    if (options.startVel) {
+      this._blendStartVel[0] = options.startVel.x ?? options.startVel[0] ?? 0.0;
+      this._blendStartVel[1] = options.startVel.y ?? options.startVel[1] ?? 0.0;
+      this._blendStartVel[2] = options.startVel.z ?? options.startVel[2] ?? 0.0;
+    }
+
+    // Configure binary star system in orbital engine
+    if (this.orbitalEngine) {
+      if (this.binarySystem) {
+        this.binarySystem.setup();
+      } else {
+        setupChapter2Binary(this.orbitalEngine);
+      }
+      // Re-place planet at active planet index with start state to ensure continuity
+      const p2Idx = this._findPlanetIndex();
+      if (p2Idx !== -1) {
+        const i3 = p2Idx * 3;
+        this.orbitalEngine.positions[i3] = this._blendStartPos[0];
+        this.orbitalEngine.positions[i3 + 1] = this._blendStartPos[1];
+        this.orbitalEngine.positions[i3 + 2] = this._blendStartPos[2];
+        this.orbitalEngine.velocities[i3] = this._blendStartVel[0];
+        this.orbitalEngine.velocities[i3 + 1] = this._blendStartVel[1];
+        this.orbitalEngine.velocities[i3 + 2] = this._blendStartVel[2];
+      }
+    }
+
+    if (options.targetPos) {
+      this._blendTargetPos[0] = options.targetPos.x ?? options.targetPos[0] ?? (TRANSITION_CONFIG?.TARGET_POS?.x ?? 0.0);
+      this._blendTargetPos[1] = options.targetPos.y ?? options.targetPos[1] ?? (TRANSITION_CONFIG?.TARGET_POS?.y ?? 2.4);
+      this._blendTargetPos[2] = options.targetPos.z ?? options.targetPos[2] ?? (TRANSITION_CONFIG?.TARGET_POS?.z ?? 0.0);
+    } else {
+      this._blendTargetPos[0] = TRANSITION_CONFIG?.TARGET_POS?.x ?? 0.0;
+      this._blendTargetPos[1] = TRANSITION_CONFIG?.TARGET_POS?.y ?? 2.4;
+      this._blendTargetPos[2] = TRANSITION_CONFIG?.TARGET_POS?.z ?? 0.0;
+    }
+
+    if (options.targetVel) {
+      this._blendTargetVel[0] = options.targetVel.x ?? options.targetVel[0] ?? (TRANSITION_CONFIG?.TARGET_VEL?.x ?? -0.9128709291752769);
+      this._blendTargetVel[1] = options.targetVel.y ?? options.targetVel[1] ?? (TRANSITION_CONFIG?.TARGET_VEL?.y ?? 0.0);
+      this._blendTargetVel[2] = options.targetVel.z ?? options.targetVel[2] ?? (TRANSITION_CONFIG?.TARGET_VEL?.z ?? 0.0);
+    } else {
+      this._blendTargetVel[0] = TRANSITION_CONFIG?.TARGET_VEL?.x ?? -0.9128709291752769;
+      this._blendTargetVel[1] = TRANSITION_CONFIG?.TARGET_VEL?.y ?? 0.0;
+      this._blendTargetVel[2] = TRANSITION_CONFIG?.TARGET_VEL?.z ?? 0.0;
+    }
+
+    if (this.eventBus && typeof this.eventBus.emit === 'function') {
+      this.eventBus.emit(Events.MISSION, {
+        chapter: 2,
+        chapterState: this.chapterState,
+        isTransitioning: true,
+        cosmicEnergy: this.cosmicEnergy
+      });
+    }
   }
 
   /**
@@ -111,9 +252,20 @@ export class MissionController {
       this.milestoneReached = true;
       this.trickSequencer.setChapter(this.chapter);
 
+      if (this.chapter === 2) {
+        this.startTransitionToBinary();
+      } else if (this.chapter === 3) {
+        this.chapterState = 'CHAPTER_3';
+        this._isTransitioning = false;
+      } else if (this.chapter === 4) {
+        this.chapterState = 'CHAPTER_4_FINALE';
+        this._isTransitioning = false;
+      }
+
       if (this.eventBus && typeof this.eventBus.emit === 'function') {
         this.eventBus.emit(Events.MISSION, {
           chapter: this.chapter,
+          chapterState: this.chapterState,
           milestoneReached: true,
           cosmicEnergy: this.cosmicEnergy,
           targetEnergy: this.getChapterTargetEnergy(this.chapter)
@@ -282,9 +434,31 @@ export class MissionController {
     this.chapter = ch;
     this.trickSequencer.setChapter(ch);
 
+    if (ch === 1) {
+      this.chapterState = ChapterTransitionState.CHAPTER_1_CAPTURE;
+      this._isTransitioning = false;
+      this.transitionProgress = 0.0;
+      this.transitionElapsed = 0.0;
+    } else if (ch === 2) {
+      if (this.chapterState === ChapterTransitionState.CHAPTER_1_CAPTURE) {
+        this.chapterState = ChapterTransitionState.CHAPTER_2_RESONANCE;
+        this._isTransitioning = false;
+        this.transitionProgress = 1.0;
+      }
+    } else if (ch === 3) {
+      this.chapterState = 'CHAPTER_3';
+      this._isTransitioning = false;
+      this.transitionProgress = 1.0;
+    } else if (ch === 4) {
+      this.chapterState = 'CHAPTER_4_FINALE';
+      this._isTransitioning = false;
+      this.transitionProgress = 1.0;
+    }
+
     if (this.eventBus && typeof this.eventBus.emit === 'function') {
       this.eventBus.emit(Events.MISSION, {
         chapter: this.chapter,
+        chapterState: this.chapterState,
         milestoneReached: true,
         cosmicEnergy: this.cosmicEnergy,
         targetEnergy: this.getChapterTargetEnergy(this.chapter)
@@ -344,7 +518,9 @@ export class MissionController {
   }
 
   /**
-   * Advances exponential smoothing filters for all visual planet scalars toward their targets.
+   * Advances exponential smoothing filters for all visual planet scalars toward their targets,
+   * steps transition blending if active, and verifies three-body alignment.
+   * Completely zero dynamic allocations in the runtime loop.
    *
    * @param {number} dt - Delta time in seconds
    * @returns {{ missionState: MissionState, planetState: PlanetState }}
@@ -377,6 +553,113 @@ export class MissionController {
       this.atmosphereDensity = Math.min(1.0, Math.max(0.0, this.atmosphereDensity));
       this.oceanFillLevel = Math.min(1.0, Math.max(0.0, this.oceanFillLevel));
       this.ringFormationAlpha = Math.min(1.0, Math.max(0.0, this.ringFormationAlpha));
+
+      // Handle active Chapter 1 -> Chapter 2 transition blending
+      if (this._isTransitioning) {
+        this.transitionElapsed += dt;
+        const tau = Math.min(1.0, Math.max(0.0, this.transitionElapsed / this.transitionDuration));
+        this.transitionProgress = tau;
+
+        // Cubic Hermite smoothstep: S(tau) = 3*tau^2 - 2*tau^3
+        const s = tau * tau * (3.0 - 2.0 * tau);
+        // Time derivative: dS/dt = 6*tau*(1 - tau) / T
+        const dsDt = (6.0 * tau * (1.0 - tau)) / this.transitionDuration;
+
+        const dx = this._blendTargetPos[0] - this._blendStartPos[0];
+        const dy = this._blendTargetPos[1] - this._blendStartPos[1];
+        const dz = this._blendTargetPos[2] - this._blendStartPos[2];
+
+        const posX = this._blendStartPos[0] + s * dx;
+        const posY = this._blendStartPos[1] + s * dy;
+        const posZ = this._blendStartPos[2] + s * dz;
+
+        const velX = (1.0 - s) * this._blendStartVel[0] + s * this._blendTargetVel[0] + dsDt * dx;
+        const velY = (1.0 - s) * this._blendStartVel[1] + s * this._blendTargetVel[1] + dsDt * dy;
+        const velZ = (1.0 - s) * this._blendStartVel[2] + s * this._blendTargetVel[2] + dsDt * dz;
+
+        if (this.orbitalEngine) {
+          const pIdx = this._findPlanetIndex();
+          if (pIdx !== -1) {
+            const i3 = pIdx * 3;
+            this.orbitalEngine.positions[i3] = posX;
+            this.orbitalEngine.positions[i3 + 1] = posY;
+            this.orbitalEngine.positions[i3 + 2] = posZ;
+            this.orbitalEngine.velocities[i3] = velX;
+            this.orbitalEngine.velocities[i3 + 1] = velY;
+            this.orbitalEngine.velocities[i3 + 2] = velZ;
+          }
+        }
+
+        if (this.transitionElapsed >= this.transitionDuration - 1e-10) {
+          this._isTransitioning = false;
+          this.transitionProgress = 1.0;
+          this.chapterState = ChapterTransitionState.CHAPTER_2_RESONANCE;
+
+          if (this.orbitalEngine) {
+            const pIdx = this._findPlanetIndex();
+            if (pIdx !== -1) {
+              const i3 = pIdx * 3;
+              this.orbitalEngine.positions[i3] = this._blendTargetPos[0];
+              this.orbitalEngine.positions[i3 + 1] = this._blendTargetPos[1];
+              this.orbitalEngine.positions[i3 + 2] = this._blendTargetPos[2];
+              this.orbitalEngine.velocities[i3] = this._blendTargetVel[0];
+              this.orbitalEngine.velocities[i3 + 1] = this._blendTargetVel[1];
+              this.orbitalEngine.velocities[i3 + 2] = this._blendTargetVel[2];
+            }
+          }
+
+          if (this.eventBus && typeof this.eventBus.emit === 'function') {
+            this.eventBus.emit(Events.CADENCE, {
+              targetCadenceSeconds: CADENCE_CONFIG.TARGET_INTERVAL
+            });
+            this.eventBus.emit(Events.MISSION, {
+              chapter: 2,
+              chapterState: this.chapterState,
+              isTransitioning: false,
+              cosmicEnergy: this.cosmicEnergy
+            });
+          }
+        }
+      }
+
+      // Check collinear three-body alignment and resonance stabilization in Chapter 2
+      if (this.chapter === 2) {
+        const align = this.getThreeBodyAlignment();
+        this.isThreeBodyAligned = align.isAligned;
+
+        if (this.chapterState === ChapterTransitionState.CHAPTER_2_RESONANCE) {
+          let shouldStabilize = false;
+          if (this.cosmicEnergy >= MISSION_THRESHOLDS.CHAPTER_2) {
+            shouldStabilize = true;
+          } else if (this.orbitalEngine) {
+            const pIdx = this._findPlanetIndex();
+            if (pIdx !== -1) {
+              const i3 = pIdx * 3;
+              const px = this.orbitalEngine.positions[i3];
+              const py = this.orbitalEngine.positions[i3 + 1];
+              const pz = this.orbitalEngine.positions[i3 + 2];
+              const r = Math.sqrt(px * px + py * py + pz * pz);
+              if (r >= 3.15) {
+                shouldStabilize = true;
+              }
+            }
+          }
+
+          if (shouldStabilize) {
+            this.chapterState = ChapterTransitionState.CHAPTER_2_STABILIZED;
+            if (this.eventBus && typeof this.eventBus.emit === 'function') {
+              this.eventBus.emit(Events.MISSION, {
+                chapter: 2,
+                chapterState: this.chapterState,
+                isStabilized: true,
+                cosmicEnergy: this.cosmicEnergy
+              });
+            }
+          }
+        }
+      } else {
+        this.isThreeBodyAligned = false;
+      }
     }
 
     if (this.finaleManager) {
@@ -399,7 +682,10 @@ export class MissionController {
       cosmicEnergy: this.cosmicEnergy,
       targetEnergy: this.getChapterTargetEnergy(this.chapter),
       milestoneReached: this.milestoneReached,
-      activeIntervention: this.activeIntervention
+      activeIntervention: this.activeIntervention,
+      chapterState: this.chapterState,
+      isTransitioning: this._isTransitioning,
+      transitionProgress: this.transitionProgress
     });
   }
 
@@ -476,6 +762,70 @@ export class MissionController {
   }
 
   /**
+   * Returns whether Chapter 1 -> Chapter 2 orbital blending is currently active.
+   * @returns {boolean}
+   */
+  isTransitioning() {
+    return this._isTransitioning;
+  }
+
+  /**
+   * Returns normalized transition progress [0.0, 1.0].
+   * @returns {number}
+   */
+  getTransitionProgress() {
+    return this.transitionProgress;
+  }
+
+  /**
+   * Returns authoritative ChapterTransitionState enum string.
+   * @returns {string}
+   */
+  getChapterState() {
+    return this.chapterState;
+  }
+
+  /**
+   * Evaluates three-body collinear alignment (Star 1, Star 2, Planet) strictly scoped to Chapter 2.
+   * Returns { isAligned: false, angleDegrees: 180.0 } when outside Chapter 2.
+   * Completely zero-allocation: writes to and returns a cached result object.
+   *
+   * @param {Object} [options={}]
+   * @returns {{ isAligned: boolean, angleDegrees: number }}
+   */
+  getThreeBodyAlignment(options = {}) {
+    // Strictly scoped to Chapter 2
+    if (this.chapter !== 2 || this.chapterState === ChapterTransitionState.CHAPTER_1_CAPTURE) {
+      this._threeBodyAlignmentCache.isAligned = false;
+      this._threeBodyAlignmentCache.angleDegrees = 180.0;
+      return this._threeBodyAlignmentCache;
+    }
+
+    if (this.binarySystem) {
+      const res = this.binarySystem.getThreeBodyAlignment(options);
+      this._threeBodyAlignmentCache.isAligned = res.isAligned;
+      this._threeBodyAlignmentCache.angleDegrees = res.angleDegrees;
+      return this._threeBodyAlignmentCache;
+    }
+
+    if (this.orbitalEngine) {
+      const res = computeThreeBodyAlignment(this.orbitalEngine, {
+        star1: 0,
+        star2: 1,
+        planet: this._findPlanetIndex(),
+        ...options
+      });
+      this._threeBodyAlignmentCache.isAligned = res.isAligned;
+      this._threeBodyAlignmentCache.angleDegrees = res.angleDegrees;
+      return this._threeBodyAlignmentCache;
+    }
+
+    this._threeBodyAlignmentCache.isAligned = false;
+    this._threeBodyAlignmentCache.angleDegrees = 180.0;
+    return this._threeBodyAlignmentCache;
+  }
+
+  /**
    * Resets all mission progress, chapter state, scars, and smoothing filters back to initial conditions.
    */
   reset() {
@@ -485,6 +835,15 @@ export class MissionController {
     this.activeIntervention = null;
     this.scarsCount = 0;
     this._missHandledThisFlight = false;
+
+    this.chapterState = ChapterTransitionState.CHAPTER_1_CAPTURE;
+    this.transitionDuration = TRANSITION_CONFIG?.DURATION ?? 2.0;
+    this.transitionElapsed = 0.0;
+    this.transitionProgress = 0.0;
+    this._isTransitioning = false;
+    this.isThreeBodyAligned = false;
+    this._threeBodyAlignmentCache.isAligned = false;
+    this._threeBodyAlignmentCache.angleDegrees = 180.0;
 
     this.kintsugiVeinGlow = 0.0;
     this.atmosphereDensity = 0.0;
