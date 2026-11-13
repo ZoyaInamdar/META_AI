@@ -43,6 +43,7 @@ import {
   DEFAULT_PITCH_GAIN,
   PITCH_BLEND_DURATION,
   amplifyWristOrientation,
+  replaceWristPitchRoll,
 } from '../input/wristPitch.js';
 
 export class GameLoop {
@@ -116,6 +117,16 @@ export class GameLoop {
     this.rollGain = options.rollGain !== undefined ? options.rollGain : DEFAULT_ROLL_GAIN;
     this.pitchGain = options.pitchGain !== undefined ? options.pitchGain : DEFAULT_PITCH_GAIN;
     this.currentEffectivePitchGain = (this.activeTargetCup === 'base') ? this.pitchGain : 1.0;
+    this.rollDegOverride = (options.rollDegOverride !== undefined && Number.isFinite(options.rollDegOverride))
+      ? options.rollDegOverride
+      : (options.rollDeg !== undefined && Number.isFinite(options.rollDeg))
+        ? options.rollDeg
+        : null;
+    this.pitchDegOverride = (options.pitchDegOverride !== undefined && Number.isFinite(options.pitchDegOverride))
+      ? options.pitchDegOverride
+      : (options.pitchDeg !== undefined && Number.isFinite(options.pitchDeg))
+        ? options.pitchDeg
+        : null;
     this.lastRawTwistDeg = 0;
     this.lastAmplifiedTwistDeg = 0;
     this.lastRawPitchDeg = 0;
@@ -329,6 +340,19 @@ export class GameLoop {
             // Quaternion remains completely unfiltered; copy directly
             if (typeof this.gameplayKenGroup.quaternion?.copy === 'function') {
               this.gameplayKenGroup.quaternion.copy(inputOutput.quaternion);
+            }
+
+            // Replace measured pitch and/or roll if debug override is active
+            if (this.rollDegOverride !== null || this.pitchDegOverride !== null) {
+              const replacedQuat = replaceWristPitchRoll(this.gameplayKenGroup.quaternion, {
+                pitchDeg: this.pitchDegOverride,
+                rollDeg: this.rollDegOverride,
+              });
+              if (typeof this.gameplayKenGroup.quaternion?.copy === 'function') {
+                this.gameplayKenGroup.quaternion.copy(replacedQuat);
+              } else {
+                this.gameplayKenGroup.quaternion = replacedQuat;
+              }
             }
 
             // Apply roll and pitch amplification to gameplayKenGroup (hand input only)

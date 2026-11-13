@@ -7,7 +7,17 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as THREE from 'three';
-import { setupDebugScene, isDebugMode, getTargetOverride, getRollGainOverride, getPitchGainOverride } from './debugScene.js';
+import {
+  setupDebugScene,
+  isDebugMode,
+  getTargetOverride,
+  getRollGainOverride,
+  getPitchGainOverride,
+  getRollDegOverride,
+  getPitchDegOverride,
+  getCupWorldPose,
+} from './debugScene.js';
+import { GameLoop } from './GameLoop.js';
 import { CatchFlow, computeCupWorldSeatPoint } from './CatchFlow.js';
 import { BALL_RADIUS } from '../input/cupConfigs.js';
 import { EventBus } from '../contracts/EventBus.js';
@@ -917,7 +927,7 @@ describe('debugScene Module', () => {
       expect.stringContaining('[DEBUG CupReq] cup: base | localNorm: (0.0, -1.0, 0.0) | alignThresh: -0.2 (dot < -0.2) | orientThresh: <= 40.0° (dotUp >= 0.7660)')
     );
     expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[DEBUG CupReq] cup: spike | localNorm: (0.0, 1.0, 0.0) | alignThresh: -0.2 (dot < -0.2) | orientThresh: <= 18.0° (dotUp >= 0.9511)')
+      expect.stringContaining('[DEBUG CupReq] cup: spike | localNorm: (0.0, 1.0, 0.0) | alignThresh: -0.2 (dot < -0.2) | orientThresh: <= 28.0° (dotUp >= 0.8829)')
     );
 
     result.cleanup();
@@ -970,5 +980,155 @@ describe('debugScene Module', () => {
     );
 
     result.cleanup();
+  });
+
+  it('23. getPitchDegOverride and getRollDegOverride parse finite numbers only when ?debug is present', () => {
+    const originalWindow = globalThis.window;
+    try {
+      globalThis.window = { location: { search: '?debug&pitchDeg=70' } };
+      expect(getPitchDegOverride()).toBe(70);
+      expect(getRollDegOverride()).toBeNull();
+
+      globalThis.window = { location: { search: '?debug&rollDeg=30.5' } };
+      expect(getRollDegOverride()).toBe(30.5);
+      expect(getPitchDegOverride()).toBeNull();
+
+      globalThis.window = { location: { search: '?debug&pitchDeg=-45&rollDeg=-15' } };
+      expect(getPitchDegOverride()).toBe(-45);
+      expect(getRollDegOverride()).toBe(-15);
+
+      // Without ?debug: returns null
+      globalThis.window = { location: { search: '?pitchDeg=70&rollDeg=30' } };
+      expect(getPitchDegOverride()).toBeNull();
+      expect(getRollDegOverride()).toBeNull();
+
+      // Invalid number
+      globalThis.window = { location: { search: '?debug&pitchDeg=abc' } };
+      expect(getPitchDegOverride()).toBeNull();
+    } finally {
+      if (originalWindow !== undefined) {
+        globalThis.window = originalWindow;
+      } else {
+        delete globalThis.window;
+      }
+    }
+  });
+
+  it('24. with ?pitchDeg=70 and gain 2.0 the amplified pitch is 140 and Base Cup normal Y is about 0.766', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    mockKenGroup.position.set(0.0, 1.25, -0.45);
+    mockKenGroup.quaternion.set(0, 0, 0, 1);
+    mockGameLoop.activeTargetCup = 'base';
+    mockGameLoop.pitchGain = 2.0;
+    mockGameLoop.currentEffectivePitchGain = 2.0;
+
+    const result = setupDebugScene({
+      world: mockWorld,
+      game: mockGame,
+      gameLoop: mockGameLoop,
+      debug: true,
+      pitchDeg: 70,
+    });
+
+    expect(mockGameLoop.pitchDegOverride).toBe(70);
+
+    // Startup log check
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG PoseOverride] applied rollDeg: none | pitchDeg: 70.00°')
+    );
+
+    // Simulate hand update in GameLoop to verify full hand input update path
+    const kenGroup = new THREE.Group();
+    const handAdapter = {
+      gripSource: 'wrist',
+      update: vi.fn(() => ({
+        position: { x: 0.1, y: 1.25, z: -0.45 },
+        quaternion: { x: 0, y: 0, z: 0, w: 1 }, // Neutral hand pose
+        isTrackingValid: true,
+      })),
+    };
+
+    const actualLoop = new GameLoop({
+      gameplayKenGroup: kenGroup,
+      inputSource: handAdapter,
+      target: 'base',
+      pitchGain: 2.0,
+      pitchDeg: 70,
+    });
+
+    actualLoop.inputSystem.update(0.016, {
+      wrist: {
+        position: { x: 0.1, y: 1.25, z: -0.45 },
+        quaternion: { x: 0, y: 0, z: 0, w: 1 },
+        valid: true,
+      },
+    });
+
+    expect(actualLoop.lastRawPitchDeg).toBeCloseTo(70.0, 2);
+    expect(actualLoop.lastAmplifiedPitchDeg).toBeCloseTo(140.0, 2);
+
+    // Verify Base Cup world normal Y is about 0.766
+    const basePose = getCupWorldPose('base', kenGroup);
+    expect(basePose.normal.y).toBeCloseTo(0.766, 3);
+
+    // Check [DEBUG Launch] output
+    mockGameLoop.lastRawPitchDeg = 70.0;
+    mockGameLoop.lastAmplifiedPitchDeg = 140.0;
+    result.onFrame({ position: { x: 0, y: 1.25, z: -0.45 }, mode: 'air' });
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG Launch] flight:')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('| pitchDeg: (raw: 70.00°, amp: 140.00°) | appliedDeg: (roll: none, pitch: 70.00°)')
+    );
+
+    result.cleanup();
+  });
+
+  it('25. without the params nothing changes; it never acts without ?debug', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    // Part A: Without params under debug, nothing changes
+    mockGameLoop.pitchDegOverride = null;
+    mockGameLoop.rollDegOverride = null;
+
+    const resultDebug = setupDebugScene({
+      world: mockWorld,
+      game: mockGame,
+      gameLoop: mockGameLoop,
+      debug: true,
+    });
+
+    expect(mockGameLoop.pitchDegOverride).toBeNull();
+    expect(mockGameLoop.rollDegOverride).toBeNull();
+    expect(consoleSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('[DEBUG PoseOverride]')
+    );
+    resultDebug.cleanup();
+
+    // Part B: Never acts without ?debug
+    const originalWindow = globalThis.window;
+    try {
+      globalThis.window = { location: { search: '?pitchDeg=70&rollDeg=30' } };
+      const nonDebugLoop = { pitchDegOverride: null, rollDegOverride: null };
+      const resultNoDebug = setupDebugScene({
+        world: mockWorld,
+        game: mockGame,
+        gameLoop: nonDebugLoop,
+        debug: false,
+      });
+
+      expect(resultNoDebug).toBeNull();
+      expect(nonDebugLoop.pitchDegOverride).toBeNull();
+      expect(nonDebugLoop.rollDegOverride).toBeNull();
+    } finally {
+      if (originalWindow !== undefined) {
+        globalThis.window = originalWindow;
+      } else {
+        delete globalThis.window;
+      }
+    }
   });
 });

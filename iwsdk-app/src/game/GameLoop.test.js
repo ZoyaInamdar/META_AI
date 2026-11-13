@@ -2260,5 +2260,87 @@ describe('GameLoop (Person A)', () => {
         expect(kenGroup.quaternion.x).toBe(frozenQuatX);
       });
     });
+
+    // ========================================================================
+    // Q. Pitch & Roll Pose Overrides (?pitchDeg, ?rollDeg)
+    // ========================================================================
+    describe('Q. Pitch & Roll Pose Overrides (?pitchDeg, ?rollDeg)', () => {
+      it('replaces measured pitch twist with pitchDegOverride before amplification (70 deg -> 140 deg)', () => {
+        const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+        const loop = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: adapter,
+          target: 'base',
+          pitchGain: 2.0,
+          pitchDeg: 70.0,
+        });
+
+        // Feed neutral orientation from hand pose
+        loop.inputSystem.update(0.016, {
+          wrist: {
+            position: { x: 0.1, y: 1.25, z: -0.45 },
+            quaternion: { x: 0, y: 0, z: 0, w: 1 },
+            valid: true,
+          },
+        });
+
+        expect(loop.lastRawPitchDeg).toBeCloseTo(70.0, 2);
+        expect(loop.lastAmplifiedPitchDeg).toBeCloseTo(140.0, 2);
+      });
+
+      it('replaces measured roll twist with rollDegOverride before amplification (30 deg -> 60 deg)', () => {
+        const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+        const loop = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: adapter,
+          target: 'big',
+          rollGain: 2.0,
+          rollDeg: 30.0,
+        });
+
+        // Feed neutral orientation from hand pose
+        loop.inputSystem.update(0.016, {
+          wrist: {
+            position: { x: 0.1, y: 1.25, z: -0.45 },
+            quaternion: { x: 0, y: 0, z: 0, w: 1 },
+            valid: true,
+          },
+        });
+
+        expect(loop.lastRawTwistDeg).toBeCloseTo(30.0, 2);
+        expect(loop.lastAmplifiedTwistDeg).toBeCloseTo(60.0, 2);
+      });
+
+      it('without overrides, hand pose pitch and roll remain untouched', () => {
+        const adapter = new HandPoseAdapter({ hand: 'right', gripSource: 'wrist' });
+        const loop = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: adapter,
+          target: 'base',
+          pitchGain: 2.0,
+        });
+
+        const q45 = {
+          x: Math.sin(Math.PI / 8),
+          y: 0,
+          z: 0,
+          w: Math.cos(Math.PI / 8),
+        };
+
+        loop.inputSystem.update(0.016, {
+          wrist: {
+            position: { x: 0.1, y: 1.25, z: -0.45 },
+            quaternion: q45,
+            valid: true,
+          },
+        });
+
+        expect(loop.lastRawPitchDeg).toBeCloseTo(45.0, 2);
+        expect(loop.lastAmplifiedPitchDeg).toBeCloseTo(90.0, 2);
+      });
+    });
   });
 });

@@ -13,6 +13,7 @@ import {
   decomposePitchTwist,
   amplifyWristPitch,
   amplifyWristOrientation,
+  replaceWristPitchRoll,
   rotateVectorByQuat,
   normalizeQuat,
 } from './wristPitch.js';
@@ -195,5 +196,34 @@ describe('wristPitch Module', () => {
     expect(out.y).toBeCloseTo(Math.sin(yawAngle / 2), 5);
     expect(out.z).toBeCloseTo(0, 5);
     expect(out.w).toBeCloseTo(Math.cos(yawAngle / 2), 5);
+  });
+
+  it('9. replaceWristPitchRoll replaces measured pitch and roll twist angles independently', () => {
+    const qNeutral = { x: 0, y: 0, z: 0, w: 1 };
+
+    // A. Replace pitch with 70 deg
+    const qPitched = replaceWristPitchRoll(qNeutral, { pitchDeg: 70.0 });
+    const { theta: thetaX1 } = decomposePitchTwist(qPitched);
+    expect((thetaX1 * 180) / Math.PI).toBeCloseTo(70.0, 3);
+    expect(qPitched.x).toBeCloseTo(Math.sin((35.0 * Math.PI) / 180.0), 5);
+
+    // B. Replace roll with 30 deg
+    const qRolled = replaceWristPitchRoll(qNeutral, { rollDeg: 30.0 });
+    const { theta: thetaZ2 } = decomposePitchTwist(qRolled);
+    expect(qRolled.z).toBeCloseTo(Math.sin((15.0 * Math.PI) / 180.0), 5);
+
+    // C. Replace both pitch (70 deg) and roll (30 deg)
+    const qBoth = replaceWristPitchRoll(qNeutral, { pitchDeg: 70.0, rollDeg: 30.0 });
+    const details = {};
+    amplifyWristOrientation(qBoth, { rollGain: 1.0, pitchGain: 1.0 }, details);
+    expect(details.rawPitchDeg).toBeCloseTo(70.0, 3);
+    expect(details.rawTwistDeg).toBeCloseTo(30.0, 3);
+
+    // D. No options or null/undefined returns input unchanged
+    const qUnchanged = replaceWristPitchRoll(qPitched);
+    expect(qUnchanged).toBe(qPitched);
+
+    const qNull = replaceWristPitchRoll(null);
+    expect(qNull).toEqual({ x: 0, y: 0, z: 0, w: 1 });
   });
 });

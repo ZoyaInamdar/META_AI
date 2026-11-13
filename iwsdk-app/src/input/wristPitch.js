@@ -202,6 +202,56 @@ export function amplifyWristOrientation(q, options = {}, details = null) {
   return out;
 }
 
+/**
+ * Replaces measured pitch (twist about local X) and/or roll (twist about local Z) in quaternion q.
+ * Active exclusively when debug mode overrides are applied.
+ *
+ * @param {{x: number, y: number, z: number, w: number}} q
+ * @param {Object} [options={}]
+ * @param {number|null} [options.pitchDeg=null]
+ * @param {number|null} [options.rollDeg=null]
+ * @returns {{x: number, y: number, z: number, w: number}}
+ */
+export function replaceWristPitchRoll(q, options = {}) {
+  if (!q) {
+    return { x: 0, y: 0, z: 0, w: 1 };
+  }
+
+  const pitchDeg = options?.pitchDeg;
+  const rollDeg = options?.rollDeg;
+  const hasPitch = pitchDeg !== undefined && pitchDeg !== null && Number.isFinite(pitchDeg);
+  const hasRoll = rollDeg !== undefined && rollDeg !== null && Number.isFinite(rollDeg);
+
+  if (!hasPitch && !hasRoll) {
+    return q;
+  }
+
+  const { swing, theta: thetaZ } = decomposeSwingTwist(q);
+  const { swing: yawSwing, theta: thetaX } = decomposePitchTwist(swing);
+
+  const newThetaZ = hasRoll ? (rollDeg * Math.PI) / 180.0 : thetaZ;
+  const newThetaX = hasPitch ? (pitchDeg * Math.PI) / 180.0 : thetaX;
+
+  const halfRoll = newThetaZ / 2;
+  const newRollTwist = {
+    x: 0,
+    y: 0,
+    z: Math.sin(halfRoll),
+    w: Math.cos(halfRoll),
+  };
+
+  const halfPitch = newThetaX / 2;
+  const newPitchTwist = {
+    x: Math.sin(halfPitch),
+    y: 0,
+    z: 0,
+    w: Math.cos(halfPitch),
+  };
+
+  const pitched = multiplyQuat(yawSwing, newPitchTwist);
+  return normalizeQuat(multiplyQuat(pitched, newRollTwist));
+}
+
 export {
   normalizeQuat,
   canonicalizeQuat,

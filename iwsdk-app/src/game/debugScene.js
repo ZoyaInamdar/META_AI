@@ -240,6 +240,44 @@ export function getPitchGainOverride() {
 }
 
 /**
+ * Resolves forced rollDeg override from `?rollDeg=D` URL query parameter.
+ * Active exclusively when debug mode is enabled and D is a finite number.
+ *
+ * @returns {number|null}
+ */
+export function getRollDegOverride() {
+  if (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('debug') && params.has('rollDeg')) {
+      const val = parseFloat(params.get('rollDeg'));
+      if (Number.isFinite(val)) {
+        return val;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolves forced pitchDeg override from `?pitchDeg=D` URL query parameter.
+ * Active exclusively when debug mode is enabled and D is a finite number.
+ *
+ * @returns {number|null}
+ */
+export function getPitchDegOverride() {
+  if (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('debug') && params.has('pitchDeg')) {
+      const val = parseFloat(params.get('pitchDeg'));
+      if (Number.isFinite(val)) {
+        return val;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Initializes debug visuals and diagnostic logging if debug mode is active.
  *
  * @param {Object} [options={}]
@@ -324,6 +362,28 @@ export function setupDebugScene(options = {}) {
     if (gameLoop.activeTargetCup === 'base') {
       gameLoop.currentEffectivePitchGain = pitchGainOverride;
     }
+  }
+
+  // 4. Force rollDeg and pitchDeg overrides if ?rollDeg=D or ?pitchDeg=D is specified (debug only)
+  const rollDegOverride = (options.rollDeg !== undefined && Number.isFinite(options.rollDeg))
+    ? options.rollDeg
+    : getRollDegOverride();
+  if (rollDegOverride !== null && gameLoop) {
+    gameLoop.rollDegOverride = rollDegOverride;
+  }
+
+  const pitchDegOverride = (options.pitchDeg !== undefined && Number.isFinite(options.pitchDeg))
+    ? options.pitchDeg
+    : getPitchDegOverride();
+  if (pitchDegOverride !== null && gameLoop) {
+    gameLoop.pitchDegOverride = pitchDegOverride;
+  }
+
+  if (rollDegOverride !== null || pitchDegOverride !== null) {
+    console.log(
+      `[DEBUG PoseOverride] applied rollDeg: ${rollDegOverride !== null ? rollDegOverride.toFixed(2) + '°' : 'none'} | ` +
+      `pitchDeg: ${pitchDegOverride !== null ? pitchDegOverride.toFixed(2) + '°' : 'none'}`
+    );
   }
 
   // One-time [DEBUG CupReq] diagnostic log at startup for each cup (Item 1)
@@ -451,6 +511,10 @@ export function setupDebugScene(options = {}) {
       const pitchInfo = decomposePitchTwist(twistInfo.swing);
       const rawPitchDeg = gameLoop?.lastRawPitchDeg ?? ((pitchInfo.theta * 180) / Math.PI);
       const ampPitchDeg = gameLoop?.lastAmplifiedPitchDeg ?? ((pitchInfo.theta * 180) / Math.PI);
+      const rollDegOverrideVal = gameLoop?.rollDegOverride ?? rollDegOverride ?? null;
+      const pitchDegOverrideVal = gameLoop?.pitchDegOverride ?? pitchDegOverride ?? null;
+      const appliedRollDegStr = rollDegOverrideVal !== null ? rollDegOverrideVal.toFixed(2) + '°' : 'none';
+      const appliedPitchDegStr = pitchDegOverrideVal !== null ? pitchDegOverrideVal.toFixed(2) + '°' : 'none';
 
       console.log(
         `[DEBUG Launch] flight: ${currentFlightId} | target: ${activeCup} | seatCup: ${seatCup} | ` +
@@ -460,7 +524,8 @@ export function setupDebugScene(options = {}) {
         `kenRotDeg: (${kenRot.x.toFixed(2)}°, ${kenRot.y.toFixed(2)}°, ${kenRot.z.toFixed(2)}°) | ` +
         `cupDists: (${cupDists}) | ` +
         `rollGain: ${rollGain.toFixed(2)} | twistDeg: (raw: ${rawTwistDeg.toFixed(2)}°, amp: ${ampTwistDeg.toFixed(2)}°) | ` +
-        `pitchGain: ${pitchGain.toFixed(2)} | pitchDeg: (raw: ${rawPitchDeg.toFixed(2)}°, amp: ${ampPitchDeg.toFixed(2)}°)`
+        `pitchGain: ${pitchGain.toFixed(2)} | pitchDeg: (raw: ${rawPitchDeg.toFixed(2)}°, amp: ${ampPitchDeg.toFixed(2)}°) | ` +
+        `appliedDeg: (roll: ${appliedRollDegStr}, pitch: ${appliedPitchDegStr})`
       );
     }
 
