@@ -51,3 +51,15 @@ EOF
 Edge of the 40 deg tolerance (Y = 0.766) is at roughly 70-72 deg raw at gain 2.0.
 A 50-60 deg real flip does not catch at 2.0; gain 2.5-3.0 still to be tested.
 Rot X in the emulator panel does not map directly to pitchDeg; read pitchDeg in [DEBUG Launch].
+
+## Base Cup pitch gain vs real flip (exact-angle override, target = base)
+
+| pitchGain | raw | amplified | cupNorm Y | off vertical | Result |
+|---|---|---|---|---|---|
+| 2.0 | 70.6 | 141.2 | 0.754 | 41.0 deg | MISS (edge) |
+| 2.5 | 55.5 | 138.6 | 0.738 | 42.5 deg | MISS (edge) |
+| 3.0 | 55.5 | 166.4 | (fill in) | (fill in) | (fill in) |
+| 3.0 | 63.5 | 180 (clamped) | 0.990 | 8.1 deg | CATCH (ASSISTED) |
+
+Real flip needed (tolerance 40 deg, Y >= 0.766): ~71 deg at 2.0x, ~57 deg at 2.5x,
+~47 deg at 3.0x. Plan: start the Quest session at 2.5x, fall back to 3.0x if too hard.
