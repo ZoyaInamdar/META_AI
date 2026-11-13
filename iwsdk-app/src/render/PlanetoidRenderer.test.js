@@ -663,6 +663,35 @@ describe('PlanetoidRenderer (Person C)', () => {
       renderer.setVisualStage(6.0);
       expect(renderer.getVisualStage()).toBe(5.0);
     });
+
+    it('manages cinematic transformation lifecycle: start, update, finish, and cancel', () => {
+      renderer.setStage(1);
+      expect(renderer.getIsTransformationActive()).toBe(false);
+      expect(renderer.getTransformationProgress()).toBe(0.0);
+
+      renderer.startTransformation({ targetStage: 2.0 });
+      expect(renderer.getIsTransformationActive()).toBe(true);
+      expect(renderer.coreMaterial.uniforms.uTransformationProgress.value).toBe(0.0);
+
+      renderer.updateTransformation(0.55, 'climax', { visualStage: 1.8, awakeningProgress: 0.9 });
+      expect(renderer.getTransformationProgress()).toBe(0.55);
+      expect(renderer.coreMaterial.uniforms.uTransformationProgress.value).toBe(0.55);
+      expect(renderer.getVisualStage()).toBe(1.8);
+      expect(renderer.getAwakeningProgress()).toBe(0.9);
+
+      renderer.finishTransformation(2.0);
+      expect(renderer.getIsTransformationActive()).toBe(false);
+      expect(renderer.getTransformationProgress()).toBe(0.0);
+      expect(renderer.coreMaterial.uniforms.uTransformationProgress.value).toBe(0.0);
+      expect(renderer.getVisualStage()).toBe(2.0);
+
+      // Cancel behavior
+      renderer.startTransformation();
+      expect(renderer.getIsTransformationActive()).toBe(true);
+      renderer.cancelTransformation();
+      expect(renderer.getIsTransformationActive()).toBe(false);
+      expect(renderer.coreMaterial.uniforms.uTransformationProgress.value).toBe(0.0);
+    });
   });
 
   // ==========================================================================

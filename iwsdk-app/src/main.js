@@ -366,6 +366,76 @@ export class GamePipeline {
     // Execution trace logger for verification testing
     this.executionLog = [];
     this.enableTracing = false;
+
+    // Pre-allocated frozen snapshot wrappers (Zero per-frame allocation in Stage 6)
+    this._currentTimestamp = 0;
+    this._currentDtClamped = 0;
+
+    const self = this;
+
+    const frozenPhysicsState = Object.freeze(Object.defineProperties(Object.create(PhysicsState.prototype), {
+      simTime: { get: () => self.orbitalEngine.getPhysicsState().simTime, enumerable: true },
+      simulationTime: { get: () => self.orbitalEngine.getPhysicsState().simulationTime, enumerable: true },
+      substeps: { get: () => self.orbitalEngine.getPhysicsState().substeps, enumerable: true },
+      substepCount: { get: () => self.orbitalEngine.getPhysicsState().substepCount, enumerable: true },
+      bodies: { get: () => self.orbitalEngine.getPhysicsState().bodies, enumerable: true },
+    }));
+
+    const frozenMissionState = Object.freeze(Object.defineProperties(Object.create(MissionState.prototype), {
+      chapter: { get: () => self.missionController.getMissionState().chapter, enumerable: true },
+      cosmicEnergy: { get: () => self.missionController.getMissionState().cosmicEnergy, enumerable: true },
+      targetEnergy: { get: () => self.missionController.getMissionState().targetEnergy, enumerable: true },
+      chapterTargetEnergy: { get: () => self.missionController.getMissionState().chapterTargetEnergy, enumerable: true },
+      milestoneReached: { get: () => self.missionController.getMissionState().milestoneReached, enumerable: true },
+      milestoneUnlocked: { get: () => self.missionController.getMissionState().milestoneUnlocked, enumerable: true },
+      activeIntervention: { get: () => self.missionController.getMissionState().activeIntervention, enumerable: true },
+    }));
+
+    const frozenPlanetState = Object.freeze(Object.defineProperties(Object.create(PlanetState.prototype), {
+      kintsugiGlow: { get: () => self.missionController.getPlanetState().kintsugiGlow, enumerable: true },
+      kintsugiVeinGlow: { get: () => self.missionController.getPlanetState().kintsugiVeinGlow, enumerable: true },
+      atmosphereDensity: { get: () => self.missionController.getPlanetState().atmosphereDensity, enumerable: true },
+      oceanFill: { get: () => self.missionController.getPlanetState().oceanFill, enumerable: true },
+      oceanFillLevel: { get: () => self.missionController.getPlanetState().oceanFillLevel, enumerable: true },
+      ringAlpha: { get: () => self.missionController.getPlanetState().ringAlpha, enumerable: true },
+      ringFormationAlpha: { get: () => self.missionController.getPlanetState().ringFormationAlpha, enumerable: true },
+      shieldCharge: { get: () => self.missionController.getPlanetState().shieldCharge, enumerable: true },
+      scarsCount: { get: () => self.missionController.getPlanetState().scarsCount, enumerable: true },
+      scars: { get: () => self.missionController.getPlanetState().scars, enumerable: true },
+      goldIgnited: { get: () => self.missionController.getPlanetState().goldIgnited, enumerable: true },
+      isGoldIgnited: { get: () => self.missionController.getPlanetState().isGoldIgnited, enumerable: true },
+    }));
+
+    const frozenTargetState = Object.freeze(Object.defineProperties(Object.create(TargetState.prototype), {
+      cupKey: { get: () => self.missionController.getTargetState().cupKey, enumerable: true },
+      trick: { get: () => self.missionController.getTargetState().trick, enumerable: true },
+      sequenceIndex: { get: () => self.missionController.getTargetState().sequenceIndex, enumerable: true },
+      targetCup: { get: () => self.missionController.getTargetState().targetCup, enumerable: true },
+    }));
+
+    const frozenBallState = Object.freeze(Object.defineProperties(Object.create(BallState.prototype), {
+      position: { get: () => self.catchDetector.getBallState?.()?.position, enumerable: true },
+      velocity: { get: () => self.catchDetector.getBallState?.()?.velocity, enumerable: true },
+      mode: { get: () => self.catchDetector.getBallState?.()?.mode, enumerable: true },
+    }));
+
+    this._frozenSnapshot = Object.freeze(Object.defineProperties({}, {
+      physicsState: { value: frozenPhysicsState, enumerable: true },
+      missionState: { value: frozenMissionState, enumerable: true },
+      planetState: { value: frozenPlanetState, enumerable: true },
+      targetState: { value: frozenTargetState, enumerable: true },
+      ballState: {
+        get: () => {
+          if (!self.catchDetector?.getBallState) return null;
+          const bs = self.catchDetector.getBallState();
+          return bs ? frozenBallState : null;
+        },
+        enumerable: true,
+      },
+      gameplayKenGroup: { get: () => self.gameplayKenGroup, enumerable: true },
+      timestamp: { get: () => self._currentTimestamp, enumerable: true },
+      dtClamped: { get: () => self._currentDtClamped, enumerable: true },
+    }));
   }
 
   /**
@@ -460,18 +530,10 @@ export class GamePipeline {
     // STAGE 6: Render & Audio (Person C)
     // ------------------------------------------------------------------------
     if (this.enableTracing) this.executionLog.push({ stage: 6, event: 'STAGE_6_RENDER' });
-    const snapshot = Object.freeze({
-      physicsState: Object.freeze({ ...this.orbitalEngine.getPhysicsState() }),
-      missionState: Object.freeze({ ...this.missionController.getMissionState() }),
-      planetState: Object.freeze({ ...this.missionController.getPlanetState() }),
-      targetState: Object.freeze({ ...this.missionController.getTargetState() }),
-      ballState: this.catchDetector.getBallState ? Object.freeze({ ...this.catchDetector.getBallState() }) : null,
-      gameplayKenGroup: this.gameplayKenGroup,
-      timestamp,
-      dtClamped
-    });
+    this._currentTimestamp = timestamp;
+    this._currentDtClamped = dtClamped;
 
-    this.worldRenderer.render(snapshot);
+    this.worldRenderer.render(this._frozenSnapshot);
     this.totalRenderTicks++;
 
     if (this.enableTracing) this.executionLog.push({ stage: 6, event: 'TICK_COMPLETE' });
@@ -483,6 +545,8 @@ export class GamePipeline {
   reset() {
     this.accumulator = 0.0;
     this.lastTimestamp = null;
+    this._currentTimestamp = 0;
+    this._currentDtClamped = 0;
     this.totalPhysicsSteps = 0;
     this.totalRenderTicks = 0;
     this.executionLog = [];

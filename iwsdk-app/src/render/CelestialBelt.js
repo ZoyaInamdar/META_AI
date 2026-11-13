@@ -54,6 +54,12 @@ export const CELESTIAL_BELT_PALETTE = Object.freeze({
 export const CELESTIAL_BELT_NORMAL = Object.freeze([0.045, 0.942, 0.332]);
 
 /**
+ * Cached orbital drift rotation axis for zero-allocation per-frame updates.
+ * @readonly
+ */
+export const BELT_ROTATION_AXIS = Object.freeze(new Vector3(0, 0, 1));
+
+/**
  * Converts a hex string '#RRGGBB' to normalized RGB float array [r, g, b].
  * @param {string} hex
  * @returns {[number, number, number]}
@@ -611,17 +617,32 @@ export function updateCelestialBelt(beltGroup, dt = 0.016) {
     // Extremely slow orbital drift around normal: 0.0006 rad/s (~10,400s per orbit)
     // Appears stationary at first glance, but alive and cosmic over time
     const driftAngle = dt * 0.0006;
-    beltGroup.rotateOnAxis(new Vector3(0, 0, 1), driftAngle);
+    const axis = beltGroup._rotationAxis || BELT_ROTATION_AXIS;
+    beltGroup.rotateOnAxis(axis, driftAngle);
 
-    // Advance material uniform times
-    beltGroup.traverse((child) => {
-        if (child.isMesh || child.isPoints) {
-            const mat = child.material;
-            if (mat?.uniforms?.uTime) {
-                mat.uniforms.uTime.value += dt;
+    // Advance material uniform times without per-frame closure allocation
+    const children = beltGroup.children;
+    if (children) {
+        for (let i = 0; i < children.length; i++) {
+            const child = children[i];
+            if (child.isMesh || child.isPoints) {
+                const mat = child.material;
+                if (mat?.uniforms?.uTime) {
+                    mat.uniforms.uTime.value += dt;
+                }
+            } else if (child.children && child.children.length > 0) {
+                for (let j = 0; j < child.children.length; j++) {
+                    const nested = child.children[j];
+                    if (nested.isMesh || nested.isPoints) {
+                        const mat = nested.material;
+                        if (mat?.uniforms?.uTime) {
+                            mat.uniforms.uTime.value += dt;
+                        }
+                    }
+                }
             }
         }
-    });
+    }
 }
 
 /**

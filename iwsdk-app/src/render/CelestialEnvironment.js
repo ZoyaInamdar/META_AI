@@ -31,6 +31,11 @@ import {
     PLANETOID_SHOWCASE_ANCHOR,
 } from './PlanetoidRenderer.js';
 import { PlanetEvolutionController } from '../gameplay/PlanetEvolutionController.js';
+import { PlanetTransformationController } from '../game/PlanetTransformationController.js';
+import { PlanetUnlockUI } from '../ui/PlanetUnlockUI.js';
+import { PlanetUnlockCelebration } from '../ui/PlanetUnlockCelebration.js';
+import NarrativeDirector from '../game/NarrativeDirector.js';
+import OrreryVisualSystem, { ORRERY_DEFAULT_ANCHOR } from './OrreryVisualSystem.js';
 import { Vector3 } from 'three';
 import { eventBus as defaultEventBus } from '../contracts/EventBus.js';
 import { Events, BallState, PlanetState, BallMode } from '../contracts/Interfaces.js';
@@ -313,11 +318,32 @@ export class CelestialEnvironmentSystem extends createSystem({
     /** @type {Vector3 | null} */
     _scratchSeatedPos = null;
 
+    /** @type {Vector3 | null} */
+    _cachedCamPos = null;
+
+    /** @type {Vector3 | null} */
+    _cachedCamDir = null;
+
+    /** @type {boolean} */
+    _visibilityDirty = true;
+
     /** @type {BallState | null} */
     _defaultSeatedBallState = null;
 
     /** @type {PlanetState | null} */
     _defaultPlanetState = null;
+
+    /** @type {PlanetUnlockUI | null} */
+    unlockUI = null;
+
+    /** @type {PlanetUnlockCelebration | null} */
+    unlockCelebration = null;
+
+    /** @type {NarrativeDirector | null} */
+    narrativeDirector = null;
+
+    /** @type {OrreryVisualSystem | null} */
+    orreryVisualSystem = null;
 
     init() {
         this.mode = 'showroom';
@@ -335,9 +361,17 @@ export class CelestialEnvironmentSystem extends createSystem({
         this.wiredSelectPlinthNode = null;
         this.planetoidRenderer = null;
         this.evolutionController = null;
+        this.transformationController = null;
+        this.unlockUI = null;
+        this.unlockCelebration = null;
+        this.narrativeDirector = null;
+        this.orreryVisualSystem = null;
         this.lastBallState = null;
         this.lastPlanetState = null;
         this._scratchSeatedPos = new Vector3();
+        this._cachedCamPos = new Vector3();
+        this._cachedCamDir = new Vector3();
+        this._visibilityDirty = true;
         this._defaultSeatedBallState = null;
         this._defaultPlanetState = null;
         this.eventUnsubs = [];
@@ -366,7 +400,7 @@ export class CelestialEnvironmentSystem extends createSystem({
         if (this.world?.activeLevel?.value) {
             return this.world.activeLevel.value;
         }
-        for (const root of this.queries.levelRoots.entities) {
+        for (const root of this.queries?.levelRoots?.entities || []) {
             return root;
         }
         return null;
@@ -598,6 +632,39 @@ export class CelestialEnvironmentSystem extends createSystem({
     }
 
     /**
+     * Ensures the procedural OrreryVisualSystem instance is created and attached to landmarksGroup.
+     * Reuses existing instance across showroom/gameplay transitions to prevent duplicate meshes.
+     * Attaches to landmarksGroup so it shares the celestial structures hierarchy
+     * and preserves the 4 top-level scene objects in sceneGroup.
+     * @returns {OrreryVisualSystem}
+     */
+    ensureOrreryVisualSystem() {
+        if (!this.narrativeDirector) {
+            this.narrativeDirector = new NarrativeDirector({ eventBus: defaultEventBus });
+        }
+        if (!this.orreryVisualSystem) {
+            this.orreryVisualSystem = new OrreryVisualSystem({
+                narrativeDirector: this.narrativeDirector,
+                parentGroup: this.landmarksGroup || null,
+                eventBus: defaultEventBus,
+                planetoidRenderer: this.planetoidRenderer
+            });
+            if (this.evolutionController && typeof this.evolutionController.getVisualStage === 'function' && typeof this.orreryVisualSystem.setVisualStage === 'function') {
+                this.orreryVisualSystem.setVisualStage(this.evolutionController.getVisualStage());
+            }
+            if (this.orreryVisualSystem.group) {
+                this.orreryVisualSystem.group.visible = (this.mode === 'gameplay' || this.mode === 'planet-showcase');
+            }
+        }
+        if (this.landmarksGroup && this.orreryVisualSystem.group?.parent !== this.landmarksGroup) {
+            if (typeof this.landmarksGroup.add === 'function') {
+                this.landmarksGroup.add(this.orreryVisualSystem.group);
+            }
+        }
+        return this.orreryVisualSystem;
+    }
+
+    /**
      * Ensures the procedural PlanetoidRenderer instance is created and attached to the Three.js scene.
      * Reuses existing instance across showroom/gameplay transitions to prevent duplicate meshes.
      * Attaches to landmarksGroup so it shares the celestial structures hierarchy
@@ -611,7 +678,14 @@ export class CelestialEnvironmentSystem extends createSystem({
                 scale: PLANETOID_DEFAULT_SCALE
             });
             if (this.planetoidRenderer.group) {
-                this.planetoidRenderer.group.visible = (this.mode === 'gameplay' || this.mode === 'planet-showcase') || this.planetoidRenderer.isDebugMode();
+                // In gameplay mode, the Three-Body planetary body is the visible representation
+                // of Our Planet. The close-up PlanetoidRenderer is hidden so it does not compete,
+                // remaining active for showcase, showroom, and debug modes.
+                const isCh2Active = (this.orreryVisualSystem && (this.orreryVisualSystem.getChapter() === 2 || (typeof this.orreryVisualSystem.isChapter2DebugActive === 'function' && this.orreryVisualSystem.isChapter2DebugActive())));
+                this.planetoidRenderer.group.visible = !isCh2Active && ((this.mode === 'planet-showcase') || this.planetoidRenderer.isDebugMode());
+            }
+            if (this.orreryVisualSystem && typeof this.orreryVisualSystem.setPlanetoidRenderer === 'function') {
+                this.orreryVisualSystem.setPlanetoidRenderer(this.planetoidRenderer);
             }
             if (!this.evolutionController) {
                 this.evolutionController = new PlanetEvolutionController({
@@ -621,10 +695,97 @@ export class CelestialEnvironmentSystem extends createSystem({
             } else if (!this.evolutionController.planetoidRenderer) {
                 this.evolutionController.setPlanetoidRenderer(this.planetoidRenderer);
             }
+            if (!this.transformationController) {
+                this.transformationController = new PlanetTransformationController({
+                    evolutionController: this.evolutionController,
+                    planetoidRenderer: this.planetoidRenderer,
+                    eventBus: defaultEventBus,
+                    autoTransform: true,
+                });
+            } else {
+                if (!this.transformationController.evolutionController) {
+                    this.transformationController.setEvolutionController(this.evolutionController);
+                }
+                if (!this.transformationController.planetoidRenderer) {
+                    this.transformationController.setPlanetoidRenderer(this.planetoidRenderer);
+                }
+            }
+            if (!this.unlockUI) {
+                this.unlockUI = new PlanetUnlockUI({
+                    eventBus: defaultEventBus,
+                    planetoidRenderer: this.planetoidRenderer,
+                    parentGroup: this.landmarksGroup,
+                    autoSubscribe: false,
+                });
+            } else {
+                if (!this.unlockUI.planetoidRenderer) {
+                    this.unlockUI.setPlanetoidRenderer(this.planetoidRenderer);
+                }
+                if (this.landmarksGroup && this.unlockUI.group?.parent !== this.landmarksGroup) {
+                    this.unlockUI.setParentGroup(this.landmarksGroup);
+                }
+            }
+            if (!this.unlockCelebration) {
+                this.unlockCelebration = new PlanetUnlockCelebration({
+                    eventBus: defaultEventBus,
+                    planetoidRenderer: this.planetoidRenderer,
+                    unlockUI: this.unlockUI,
+                    parentGroup: this.landmarksGroup,
+                });
+            } else {
+                if (!this.unlockCelebration.planetoidRenderer) {
+                    this.unlockCelebration.setPlanetoidRenderer(this.planetoidRenderer);
+                }
+                if (!this.unlockCelebration.unlockUI) {
+                    this.unlockCelebration.setUnlockUI(this.unlockUI);
+                }
+                if (this.landmarksGroup && this.unlockCelebration.group?.parent !== this.landmarksGroup) {
+                    this.unlockCelebration.setParentGroup(this.landmarksGroup);
+                }
+            }
+            if (!this.narrativeDirector) {
+                this.narrativeDirector = new NarrativeDirector({ eventBus: defaultEventBus });
+            }
+            if (!this.orreryVisualSystem) {
+                this.orreryVisualSystem = new OrreryVisualSystem({
+                    narrativeDirector: this.narrativeDirector,
+                    parentGroup: this.landmarksGroup,
+                    eventBus: defaultEventBus,
+                    planetoidRenderer: this.planetoidRenderer
+                });
+                if (this.orreryVisualSystem.group) {
+                    this.orreryVisualSystem.group.visible = (this.mode === 'gameplay' || this.mode === 'planet-showcase');
+                }
+            } else if (this.landmarksGroup && this.orreryVisualSystem.group?.parent !== this.landmarksGroup) {
+                if (typeof this.landmarksGroup.add === 'function') {
+                    this.landmarksGroup.add(this.orreryVisualSystem.group);
+                }
+            }
+            if (this.orreryVisualSystem && this.evolutionController && typeof this.evolutionController.getVisualStage === 'function' && typeof this.orreryVisualSystem.setVisualStage === 'function') {
+                this.orreryVisualSystem.setVisualStage(this.evolutionController.getVisualStage());
+            }
             const globalScope = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
             if (globalScope) {
                 globalScope.planetoidRenderer = this.planetoidRenderer;
                 globalScope.celestialEvolution = this.evolutionController;
+                globalScope.celestialTransformation = this.transformationController;
+                globalScope.planetUnlockCelebration = this.unlockCelebration;
+                globalScope.narrativeDirector = this.narrativeDirector;
+                globalScope.orreryVisualSystem = this.orreryVisualSystem;
+                globalScope.planetUnlockUI = {
+                    showStage: (s = 2) => this.unlockUI?.showStage(s),
+                    show: (s = 2) => this.unlockUI?.show(s),
+                    hide: () => this.unlockUI?.hide(),
+                    isVisible: () => this.unlockUI?.isVisible(),
+                    getState: () => this.unlockUI?.getState(),
+                    getPhase: () => this.unlockUI?.getPhase(),
+                    getProgress: () => this.unlockUI?.getProgress(),
+                    getDebugInfo: () => this.unlockUI?.getDebugInfo(),
+                    getWorldPosition: () => this.unlockUI?.getWorldPosition(),
+                    getWorldScale: () => this.unlockUI?.getWorldScale(),
+                    debugForceVisible: (s = 2) => this.unlockUI?.debugForceVisible(s),
+                    reset: () => this.unlockUI?.hide(),
+                };
                 globalScope.__CELESTIAL_PLANETOID_DEBUG__ = {
                     setStage: (s) => {
                         const res = this.planetoidRenderer?.setDebugStage(s);
@@ -696,7 +857,21 @@ export class CelestialEnvironmentSystem extends createSystem({
                     getShowcaseAnchor: () => this.planetoidRenderer?.getShowcaseAnchor(),
                     getGameplayScale: () => this.planetoidRenderer?.getGameplayScale(),
                     getGameplayAnchor: () => this.planetoidRenderer?.getGameplayAnchor(),
+                    startTransformation: (cfg) => this.planetoidRenderer?.startTransformation(cfg),
+                    updateTransformation: (p, phase, params) => this.planetoidRenderer?.updateTransformation(p, phase, params),
+                    finishTransformation: (s) => this.planetoidRenderer?.finishTransformation(s),
+                    cancelTransformation: () => this.planetoidRenderer?.cancelTransformation(),
                     evolution: this.evolutionController,
+                    transformation: this.transformationController,
+                    unlockCelebration: this.unlockCelebration,
+                    playCelebration: (s = 2) => this.unlockCelebration?.play(s),
+                    debugShowCelebration: (s = 2) => this.unlockCelebration?.debugShow(s),
+                    unlockUI: this.unlockUI,
+                    showUnlockUI: (s = 2) => this.unlockUI?.showStage(s),
+                    hideUnlockUI: () => this.unlockUI?.hide(),
+                    isUnlockUIVisible: () => this.unlockUI?.isVisible(),
+                    getUnlockUIDebugInfo: () => this.unlockUI?.getDebugInfo(),
+                    debugForceUnlockUI: (s = 2) => this.unlockUI?.debugForceVisible(s),
                 };
             }
         }
@@ -704,6 +879,15 @@ export class CelestialEnvironmentSystem extends createSystem({
         if (this.landmarksGroup && this.planetoidRenderer.group?.parent !== this.landmarksGroup) {
             if (typeof this.landmarksGroup.add === 'function') {
                 this.landmarksGroup.add(this.planetoidRenderer.group);
+                if (this.unlockCelebration && this.unlockCelebration.group?.parent !== this.landmarksGroup) {
+                    this.unlockCelebration.setParentGroup(this.landmarksGroup);
+                }
+                if (this.unlockUI && this.unlockUI.group?.parent !== this.landmarksGroup) {
+                    this.unlockUI.setParentGroup(this.landmarksGroup);
+                }
+                if (this.orreryVisualSystem && this.orreryVisualSystem.group?.parent !== this.landmarksGroup) {
+                    this.landmarksGroup.add(this.orreryVisualSystem.group);
+                }
             } else if (typeof this.world?.scene?.add === 'function' && this.planetoidRenderer.group?.parent !== this.world.scene) {
                 this.world.scene.add(this.planetoidRenderer.group);
             }
@@ -711,6 +895,15 @@ export class CelestialEnvironmentSystem extends createSystem({
             const landmarks = this.ensureLandmarksGroup();
             if (typeof landmarks?.add === 'function' && this.planetoidRenderer.group?.parent !== landmarks) {
                 landmarks.add(this.planetoidRenderer.group);
+                if (this.unlockCelebration && this.unlockCelebration.group?.parent !== landmarks) {
+                    this.unlockCelebration.setParentGroup(landmarks);
+                }
+                if (this.unlockUI && this.unlockUI.group?.parent !== landmarks) {
+                    this.unlockUI.setParentGroup(landmarks);
+                }
+                if (this.orreryVisualSystem && this.orreryVisualSystem.group?.parent !== landmarks) {
+                    landmarks.add(this.orreryVisualSystem.group);
+                }
             } else if (typeof this.world?.scene?.add === 'function' && this.planetoidRenderer.group?.parent !== this.world.scene) {
                 this.world.scene.add(this.planetoidRenderer.group);
             }
@@ -737,9 +930,9 @@ export class CelestialEnvironmentSystem extends createSystem({
 
         const camera = this.world?.camera;
         if (camera && typeof camera.getWorldPosition === 'function' && typeof camera.getWorldDirection === 'function') {
-            const camPos = new Vector3();
+            const camPos = this._cachedCamPos || (this._cachedCamPos = new Vector3());
             camera.getWorldPosition(camPos);
-            const camDir = new Vector3();
+            const camDir = this._cachedCamDir || (this._cachedCamDir = new Vector3());
             camera.getWorldDirection(camDir);
 
             if (camPos.lengthSq() > 0.01 || Math.abs(camDir.z) > 0.1) {
@@ -883,6 +1076,7 @@ export class CelestialEnvironmentSystem extends createSystem({
         const onChildAdded = (event) => {
             const child = event?.child || event?.object;
             if (child) {
+                this._visibilityDirty = true;
                 if (this.mode === 'gameplay') {
                     this.applyGameplayVisibility();
                 } else if (this.mode === 'planet-showcase') {
@@ -905,6 +1099,7 @@ export class CelestialEnvironmentSystem extends createSystem({
      * Applies gameplay visibility across showroom and Kendama hierarchies.
      */
     applyGameplayVisibility() {
+        this._visibilityDirty = false;
         // 1. Standalone showroom objects to hide
         for (const id of SHOWROOM_NODE_IDS_TO_HIDE) {
             const obj = this.findSceneObject(id);
@@ -1009,6 +1204,7 @@ export class CelestialEnvironmentSystem extends createSystem({
      * while leaving all physics, game loops, and contracts running unaffected.
      */
     applyShowcaseVisibility() {
+        this._visibilityDirty = false;
         // 1. Standalone showroom objects to hide
         for (const id of SHOWROOM_NODE_IDS_TO_HIDE) {
             const obj = this.findSceneObject(id);
@@ -1084,6 +1280,7 @@ export class CelestialEnvironmentSystem extends createSystem({
      * Restores all managed objects to their exact authored visibility states.
      */
     restoreShowroomVisibility() {
+        this._visibilityDirty = false;
         for (const [obj, originalVisible] of this.visibilityBaseline.entries()) {
             if (obj && typeof obj.visible === 'boolean') {
                 obj.visible = originalVisible;
@@ -1170,6 +1367,13 @@ export class CelestialEnvironmentSystem extends createSystem({
                     planetoid.group.visible = true;
                 }
             }
+            const orrery = this.ensureOrreryVisualSystem();
+            if (orrery) {
+                if (this.evolutionController && typeof this.evolutionController.getVisualStage === 'function' && typeof orrery.setVisualStage === 'function') {
+                    orrery.setVisualStage(this.evolutionController.getVisualStage());
+                }
+                orrery.setVisible(true);
+            }
         } else if (mode === 'gameplay') {
             // Apply gameplay visibility (hiding showroom furniture and auxiliary Kendama views)
             this.applyGameplayVisibility();
@@ -1200,8 +1404,17 @@ export class CelestialEnvironmentSystem extends createSystem({
                 planetoid.setShowcaseMode(false);
                 this.updatePlanetoidAnchorFromCamera();
                 if (planetoid.group) {
-                    planetoid.group.visible = true;
+                    // Close-up PlanetoidRenderer is hidden during gameplay in favor of the Three-Body system
+                    const isCh2Active = (this.orreryVisualSystem && (this.orreryVisualSystem.getChapter() === 2 || (typeof this.orreryVisualSystem.isChapter2DebugActive === 'function' && this.orreryVisualSystem.isChapter2DebugActive())));
+                    planetoid.group.visible = !isCh2Active && Boolean(planetoid.isDebugMode());
                 }
+            }
+            const orrery = this.ensureOrreryVisualSystem();
+            if (orrery) {
+                if (this.evolutionController && typeof this.evolutionController.getVisualStage === 'function' && typeof orrery.setVisualStage === 'function') {
+                    orrery.setVisualStage(this.evolutionController.getVisualStage());
+                }
+                orrery.setVisible(true);
             }
         } else {
             // Restore original showroom visibility states from baseline
@@ -1222,6 +1435,9 @@ export class CelestialEnvironmentSystem extends createSystem({
             }
             if (this.beltGroup) {
                 this.beltGroup.visible = false;
+            }
+            if (this.orreryVisualSystem) {
+                this.orreryVisualSystem.setVisible(false);
             }
             if (this.planetoidRenderer) {
                 this.planetoidRenderer.setShowcaseMode(false);
@@ -1318,11 +1534,14 @@ export class CelestialEnvironmentSystem extends createSystem({
                 }
             }
 
-            // Enforce appropriate visibility in case of late-loaded children
-            if (this.mode === 'planet-showcase') {
-                this.applyShowcaseVisibility();
-            } else {
-                this.applyGameplayVisibility();
+            // Enforce appropriate visibility only when hierarchy/mode state is dirty
+            if (this._visibilityDirty) {
+                if (this.mode === 'planet-showcase') {
+                    this.applyShowcaseVisibility();
+                } else {
+                    this.applyGameplayVisibility();
+                }
+                this._visibilityDirty = false;
             }
 
             const deltaSeconds = (typeof dt === 'number' && Number.isFinite(dt)) ? dt : 0.016;
@@ -1357,6 +1576,12 @@ export class CelestialEnvironmentSystem extends createSystem({
             }
         }
 
+        // Ensure standalone foreground PlanetoidRenderer never competes during Chapter 2
+        const isCh2Active = (this.orreryVisualSystem && (this.orreryVisualSystem.getChapter() === 2 || (typeof this.orreryVisualSystem.isChapter2DebugActive === 'function' && this.orreryVisualSystem.isChapter2DebugActive())));
+        if (isCh2Active && this.planetoidRenderer?.group && !this.planetoidRenderer.isDebugMode()) {
+            this.planetoidRenderer.group.visible = false;
+        }
+
         // Update PlanetoidRenderer driven by read-only BallState & PlanetState
         if (this.planetoidRenderer && (this.mode === 'gameplay' || this.mode === 'planet-showcase' || this.planetoidRenderer.isDebugMode())) {
             const deltaSeconds = (typeof dt === 'number' && Number.isFinite(dt)) ? dt : 0.016;
@@ -1379,10 +1604,78 @@ export class CelestialEnvironmentSystem extends createSystem({
 
             this.planetoidRenderer.update(deltaSeconds, activeBallState, activePlanetState);
             this.evolutionController?.update(deltaSeconds);
+            this.transformationController?.update(deltaSeconds);
+            this.unlockCelebration?.update(deltaSeconds);
+            this.unlockUI?.update(deltaSeconds);
+        }
+
+        // Animate procedural Orrery visual system
+        if (this.orreryVisualSystem && (this.mode === 'gameplay' || this.mode === 'planet-showcase' || this.orreryVisualSystem.isVisible())) {
+            const deltaSeconds = (typeof dt === 'number' && Number.isFinite(dt)) ? dt : 0.016;
+            if (this.evolutionController && typeof this.evolutionController.getVisualStage === 'function' && typeof this.orreryVisualSystem.setVisualStage === 'function') {
+                this.orreryVisualSystem.setVisualStage(this.evolutionController.getVisualStage());
+            }
+            this.orreryVisualSystem.update(deltaSeconds);
+
+            // Section 12: Temporarily quiet background during three-body alignment & pulse for enhanced contrast
+            if (typeof this.orreryVisualSystem.getAlignmentVisualState === 'function') {
+                const alignVis = this.orreryVisualSystem.getAlignmentVisualState();
+                if (alignVis.active) {
+                    let nebulaTarget = 0.85;
+                    let beltTarget = 0.95;
+                    if (alignVis.phase === 'CONVERGING' || alignVis.phase === 'ALIGNED') {
+                        nebulaTarget = 0.75;
+                        beltTarget = 0.75;
+                    } else if (alignVis.phase === 'PULSE') {
+                        nebulaTarget = 0.68;
+                        beltTarget = 0.48;
+                    } else if (alignVis.phase === 'REVEAL_HOLD') {
+                        nebulaTarget = 0.72;
+                        beltTarget = 0.58;
+                    } else if (alignVis.phase === 'RETURNING') {
+                        nebulaTarget = 0.80;
+                        beltTarget = 0.82;
+                    }
+                    if (this.nebulaMesh?.material?.uniforms?.uNebulaIntensity) {
+                        this.nebulaMesh.material.uniforms.uNebulaIntensity.value = nebulaTarget;
+                    }
+                    if (this.beltGroup) {
+                        this.setBeltIntensity(beltTarget);
+                    }
+                } else {
+                    // Restore exact normal baseline
+                    if (this.nebulaMesh?.material?.uniforms?.uNebulaIntensity && this.nebulaMesh.material.uniforms.uNebulaIntensity.value !== 0.85) {
+                        this.nebulaMesh.material.uniforms.uNebulaIntensity.value = 0.85;
+                    }
+                    if (this.beltGroup) {
+                        this.setBeltIntensity(0.95);
+                    }
+                }
+            }
         }
     }
 
     destroy() {
+        if (this.orreryVisualSystem) {
+            this.orreryVisualSystem.destroy();
+            this.orreryVisualSystem = null;
+        }
+        if (this.narrativeDirector) {
+            this.narrativeDirector.destroy();
+            this.narrativeDirector = null;
+        }
+        if (this.unlockCelebration) {
+            this.unlockCelebration.destroy();
+            this.unlockCelebration = null;
+        }
+        if (this.unlockUI) {
+            this.unlockUI.destroy();
+            this.unlockUI = null;
+        }
+        if (this.transformationController) {
+            this.transformationController.destroy();
+            this.transformationController = null;
+        }
         if (this.evolutionController) {
             this.evolutionController.destroy();
             this.evolutionController = null;
@@ -1410,6 +1703,12 @@ export class CelestialEnvironmentSystem extends createSystem({
         if (globalScope) {
             if (globalScope.planetoidRenderer === this.planetoidRenderer) {
                 globalScope.planetoidRenderer = null;
+            }
+            if (globalScope.narrativeDirector === this.narrativeDirector) {
+                globalScope.narrativeDirector = null;
+            }
+            if (globalScope.orreryVisualSystem === this.orreryVisualSystem) {
+                globalScope.orreryVisualSystem = null;
             }
         }
 

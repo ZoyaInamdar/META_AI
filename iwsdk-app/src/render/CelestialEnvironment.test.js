@@ -673,7 +673,7 @@ describe('CelestialEnvironment - Phase 1 Pastel Galaxy Foundation', () => {
 
             // 2. Mode Switching: gameplay activates, showroom hides
             system.setMode('gameplay');
-            assert.equal(system.planetoidRenderer.group.visible, true, 'Planetoid must be visible in gameplay mode');
+            assert.equal(system.planetoidRenderer.group.visible, false, 'PlanetoidRenderer close-up must be hidden in gameplay mode in favor of Three-Body planet');
 
             // Ensure zero duplicate planetoids across repeated toggles
             system.setMode('gameplay');
@@ -863,7 +863,103 @@ describe('CelestialEnvironment - Phase 1 Pastel Galaxy Foundation', () => {
             assert.equal(globalScope.celestialEvolution, system.evolutionController);
             assert.equal(typeof globalScope.__CELESTIAL_PLANETOID_DEBUG__.setVisualStage, 'function');
 
+            // 6. PlanetTransformationController Integration
+            assert.ok(system.transformationController, 'transformationController must be instantiated');
+            assert.equal(system.transformationController.getState(), 'idle');
+            assert.equal(system.transformationController.getPhase(), 'idle');
+            assert.equal(system.transformationController.autoTransform, true, 'autoTransform must be active in CelestialEnvironment');
+            assert.ok(globalScope.celestialTransformation, 'window.celestialTransformation must be exposed');
+            assert.equal(globalScope.celestialTransformation, system.transformationController);
+            assert.equal(typeof globalScope.__CELESTIAL_PLANETOID_DEBUG__.startTransformation, 'function');
+
+            // 7. PlanetUnlockCelebration & PlanetUnlockUI Integration
+            assert.ok(system.unlockCelebration, 'unlockCelebration must be instantiated');
+            assert.equal(system.unlockCelebration.getState(), 'idle');
+            assert.ok(globalScope.planetUnlockCelebration, 'window.planetUnlockCelebration must be exposed');
+            assert.equal(typeof globalScope.planetUnlockCelebration.play, 'function');
+            assert.equal(typeof globalScope.planetUnlockCelebration.debugShow, 'function');
+            assert.equal(typeof globalScope.planetUnlockCelebration.getState, 'function');
+            assert.equal(typeof globalScope.planetUnlockCelebration.getPhase, 'function');
+            assert.equal(typeof globalScope.planetUnlockCelebration.getProgress, 'function');
+            assert.equal(typeof globalScope.planetUnlockCelebration.reset, 'function');
+            assert.equal(typeof globalScope.__CELESTIAL_PLANETOID_DEBUG__.playCelebration, 'function');
+            assert.equal(typeof globalScope.__CELESTIAL_PLANETOID_DEBUG__.debugShowCelebration, 'function');
+
+            assert.ok(system.unlockUI, 'unlockUI must be instantiated');
+            assert.equal(system.unlockUI.getState(), 'idle');
+            assert.equal(system.unlockUI.isVisible(), false);
+            assert.ok(globalScope.planetUnlockUI, 'window.planetUnlockUI must be exposed');
+            assert.equal(typeof globalScope.planetUnlockUI.showStage, 'function');
+            assert.equal(typeof globalScope.__CELESTIAL_PLANETOID_DEBUG__.showUnlockUI, 'function');
+            assert.equal(typeof globalScope.__CELESTIAL_PLANETOID_DEBUG__.hideUnlockUI, 'function');
+
             system.destroy();
+        });
+
+        it('I. Phase 1C: OrreryVisualSystem Stage Forwarding & Three-Body Planet Integrity', () => {
+            const mockRoot = createMockLevelRootEntity(SHOWROOM_ENVIRONMENT_CONFIG);
+            const sceneGroup = new Group();
+            mockRoot.object3D = sceneGroup;
+
+            const system = new CelestialEnvironmentSystem({
+                levelRootEntity: mockRoot,
+                scene: sceneGroup,
+            });
+            system.init();
+
+            // 1. Gameplay mode visibility
+            system.setMode('gameplay');
+            assert.equal(system.planetoidRenderer.group.visible, false, 'PlanetoidRenderer must be hidden in gameplay');
+            assert.equal(system.orreryVisualSystem.group.visible, true, 'OrreryVisualSystem must be visible in gameplay');
+
+            // 2. Three-Body Planet uses ShaderMaterial
+            const ch1Planet = system.orreryVisualSystem.getChapter1PlanetNode();
+            assert.ok(ch1Planet, 'chapter-1-node must exist');
+            assert.equal(ch1Planet.material.isShaderMaterial, true, 'chapter-1-node must use ShaderMaterial');
+            assert.ok(ch1Planet.material.uniforms.uVisualStage, 'uVisualStage uniform must exist');
+
+            // 3. Stage forwarding from authoritative EvolutionController
+            assert.equal(system.orreryVisualSystem.getVisualStage(), 1.0);
+            assert.equal(ch1Planet.material.uniforms.uVisualStage.value, 1.0);
+
+            // Advance evolution progress
+            system.evolutionController.setEvolutionProgress(0.6); // visualStage = 1.0 + 0.6 = 1.6
+            system.update(0.016);
+            assert.equal(Math.round(system.orreryVisualSystem.getVisualStage() * 10) / 10, 1.6);
+            assert.equal(Math.round(ch1Planet.material.uniforms.uVisualStage.value * 10) / 10, 1.6);
+
+            // 4. Showcase mode: PlanetoidRenderer visible
+            system.setMode('planet-showcase');
+            assert.equal(system.planetoidRenderer.group.visible, true, 'PlanetoidRenderer must be visible in showcase');
+            assert.equal(system.orreryVisualSystem.group.visible, true, 'Orrery must remain visible in showcase');
+
+            // 5. Repeated Mode Switching does not duplicate nodes or corrupt uniforms
+            const initialPlanetUuid = ch1Planet.uuid;
+            const initialMaterialUuid = ch1Planet.material.uuid;
+
+            system.setMode('showroom');
+            assert.equal(system.planetoidRenderer.group.visible, false);
+            assert.equal(system.orreryVisualSystem.group.visible, false);
+
+            system.setMode('gameplay');
+            system.setMode('planet-showcase');
+            system.setMode('gameplay');
+
+            const currentPlanet = system.orreryVisualSystem.getChapter1PlanetNode();
+            assert.equal(currentPlanet.uuid, initialPlanetUuid, 'chapter-1-node must be reused across mode transitions');
+            assert.equal(currentPlanet.material.uuid, initialMaterialUuid, 'ShaderMaterial must be preserved without recreation');
+            assert.equal(Math.round(currentPlanet.material.uniforms.uVisualStage.value * 10) / 10, 1.6);
+
+            // Ensure no duplicate nodes in Landmarks group
+            let ch1PlanetCount = 0;
+            system.landmarksGroup.traverse((obj) => {
+                if (obj.name === 'chapter-1-node') ch1PlanetCount++;
+            });
+            assert.equal(ch1PlanetCount, 1, 'Exactly one chapter-1-node must exist in landmarks hierarchy');
+
+            system.destroy();
+            assert.equal(system.orreryVisualSystem, null);
+            assert.equal(system.planetoidRenderer, null);
         });
     });
 });

@@ -248,6 +248,11 @@ export class PlanetoidRenderer {
     this.awakeningDuration = 1.85; // Default ~1.85s cinematic choreography (configurable via playAwakening)
     this.awakeningElapsedTime = 0.0;
 
+    // Dedicated Cinematic Planet Transformation State
+    this.isTransformationActive = false;
+    this.transformationProgress = 0.0;
+    this.transformationTargetStage = 2.0;
+
     // Simulation & animation tracking
     this.elapsedTime = 0.0;
     this.mode = 'seated';
@@ -284,7 +289,13 @@ export class PlanetoidRenderer {
         getShowcaseScale: () => this.getShowcaseScale(),
         getShowcaseAnchor: () => this.getShowcaseAnchor(),
         getGameplayScale: () => this.getGameplayScale(),
-        getGameplayAnchor: () => this.getGameplayAnchor()
+        getGameplayAnchor: () => this.getGameplayAnchor(),
+        startTransformation: (cfg) => this.startTransformation(cfg),
+        updateTransformation: (p, phase, params) => this.updateTransformation(p, phase, params),
+        finishTransformation: (s) => this.finishTransformation(s),
+        cancelTransformation: () => this.cancelTransformation(),
+        getTransformationProgress: () => this.transformationProgress,
+        isTransformationActive: () => this.isTransformationActive
       };
     }
   }
@@ -675,7 +686,7 @@ export class PlanetoidRenderer {
       if (u.uGoldIgnited) u.uGoldIgnited.value = goldIgnitedVal;
       if (u.uVisualStage) u.uVisualStage.value = this.visualStage;
 
-      const shouldShowAtmo = atmosphereDensity > 0.01 || shieldCharge > 0.01 || goldIgnited || this.visualStage > 3.60;
+      const shouldShowAtmo = atmosphereDensity > 0.01 || shieldCharge > 0.01 || goldIgnited || this.visualStage > 2.80;
       this.atmosphereMesh.visible = shouldShowAtmo;
     }
 
@@ -1037,6 +1048,186 @@ export class PlanetoidRenderer {
    */
   isDebugMode() {
     return this.debugStage !== null;
+  }
+
+  // ==========================================================================
+  // 3B. CINEMATIC PLANET TRANSFORMATION (Stage 1 -> 2)
+  // ==========================================================================
+
+  /**
+   * Begins a cinematic planetary transformation event.
+   *
+   * @param {Object} [config={}]
+   * @param {number} [config.targetStage=2.0]
+   * @returns {this}
+   */
+  startTransformation(config = {}) {
+    this.isTransformationActive = true;
+    this.transformationProgress = 0.0;
+    this.transformationTargetStage = (typeof config.targetStage === 'number' && Number.isFinite(config.targetStage))
+      ? config.targetStage
+      : 2.0;
+
+    if (this.coreMaterial?.uniforms?.uTransformationProgress) {
+      this.coreMaterial.uniforms.uTransformationProgress.value = 0.0;
+    }
+    if (this.group) {
+      this.group.visible = true;
+    }
+    return this;
+  }
+
+  /**
+   * Updates cinematic transformation progress and delegates visual parameters.
+   *
+   * @param {number} progress - Normalized progress [0.0 .. 1.0]
+   * @param {string} [_phase=''] - Cinematic phase string
+   * @param {Object} [params={}] - Cinematic parameters (visualStage, awakeningProgress)
+   * @returns {this}
+   */
+  updateTransformation(progress, _phase = '', params = {}) {
+    if (!this.isTransformationActive && progress <= 0.0) return this;
+    const clamped = Math.max(0.0, Math.min(1.0, progress));
+    this.transformationProgress = clamped;
+
+    if (this.coreMaterial?.uniforms?.uTransformationProgress) {
+      this.coreMaterial.uniforms.uTransformationProgress.value = clamped;
+    }
+
+    if (typeof params.visualStage === 'number') {
+      this.setVisualStage(params.visualStage);
+    }
+
+    if (typeof params.awakeningProgress === 'number') {
+      this.awakeningProgress = Math.max(0.0, Math.min(1.0, params.awakeningProgress));
+      if (this.coreMaterial?.uniforms?.uAwakeningProgress) {
+        this.coreMaterial.uniforms.uAwakeningProgress.value = this.awakeningProgress;
+      }
+    }
+
+    // Dynamic multi-stage cinematic parameter overrides
+    if (typeof params.oceanFill === 'number') {
+      const val = Math.max(0.0, Math.min(1.0, params.oceanFill));
+      if (this.coreMaterial?.uniforms?.uOceanFill) {
+        this.coreMaterial.uniforms.uOceanFill.value = val;
+      }
+    }
+
+    if (typeof params.atmosphereDensity === 'number') {
+      const val = Math.max(0.0, Math.min(1.0, params.atmosphereDensity));
+      if (this.coreMaterial?.uniforms?.uAtmosphereDensity) {
+        this.coreMaterial.uniforms.uAtmosphereDensity.value = val;
+      }
+      if (this.atmosphereMaterial?.uniforms?.uAtmosphereDensity) {
+        this.atmosphereMaterial.uniforms.uAtmosphereDensity.value = val;
+      }
+      if (this.atmosphereMesh) {
+        this.atmosphereMesh.visible = (val > 0.01 || this.visualStage > 2.80);
+      }
+    }
+
+    if (typeof params.shieldCharge === 'number') {
+      const val = Math.max(0.0, Math.min(1.0, params.shieldCharge));
+      if (this.coreMaterial?.uniforms?.uShieldCharge) {
+        this.coreMaterial.uniforms.uShieldCharge.value = val;
+      }
+      if (this.atmosphereMaterial?.uniforms?.uShieldCharge) {
+        this.atmosphereMaterial.uniforms.uShieldCharge.value = val;
+      }
+    }
+
+    if (typeof params.goldIgnited !== 'undefined') {
+      const val = params.goldIgnited ? (typeof params.goldIgnited === 'number' ? params.goldIgnited : 1.0) : 0.0;
+      if (this.coreMaterial?.uniforms?.uGoldIgnited) {
+        this.coreMaterial.uniforms.uGoldIgnited.value = val;
+      }
+      if (this.atmosphereMaterial?.uniforms?.uGoldIgnited) {
+        this.atmosphereMaterial.uniforms.uGoldIgnited.value = val;
+      }
+      if (this.ringMaterial?.uniforms?.uGoldIgnited) {
+        this.ringMaterial.uniforms.uGoldIgnited.value = val;
+      }
+    }
+
+    if (typeof params.ringAlpha === 'number') {
+      const val = Math.max(0.0, Math.min(1.0, params.ringAlpha));
+      if (this.ringMaterial?.uniforms?.uRingAlpha) {
+        this.ringMaterial.uniforms.uRingAlpha.value = val;
+      }
+      if (this.ringMesh) {
+        this.ringMesh.visible = (val > 0.01 || this.visualStage > 4.45);
+      }
+    }
+
+    if (typeof params.kintsugiGlow === 'number') {
+      const val = Math.max(0.0, Math.min(1.0, params.kintsugiGlow));
+      if (this.coreMaterial?.uniforms?.uKintsugiGlow) {
+        this.coreMaterial.uniforms.uKintsugiGlow.value = val;
+      }
+    }
+
+    return this;
+  }
+
+  /**
+   * Concludes the active cinematic transformation and settles onto the new stage.
+   *
+   * @param {number} [settledStage=2.0]
+   * @returns {this}
+   */
+  finishTransformation(settledStage = 2.0) {
+    this.isTransformationActive = false;
+    this.transformationProgress = 0.0;
+
+    if (this.coreMaterial?.uniforms?.uTransformationProgress) {
+      this.coreMaterial.uniforms.uTransformationProgress.value = 0.0;
+    }
+
+    const resolved = (typeof settledStage === 'number' && Number.isFinite(settledStage))
+      ? settledStage
+      : 2.0;
+    this.setVisualStage(resolved);
+
+    // Ensure proper visibility based on settled stage
+    if (this.atmosphereMesh) {
+      this.atmosphereMesh.visible = (resolved >= 2.80);
+    }
+    if (this.ringMesh) {
+      this.ringMesh.visible = (resolved >= 4.80);
+    }
+
+    return this;
+  }
+
+  /**
+   * Cancels the active transformation and resets transformation uniforms to 0.
+   *
+   * @returns {this}
+   */
+  cancelTransformation() {
+    this.isTransformationActive = false;
+    this.transformationProgress = 0.0;
+
+    if (this.coreMaterial?.uniforms?.uTransformationProgress) {
+      this.coreMaterial.uniforms.uTransformationProgress.value = 0.0;
+    }
+    return this;
+  }
+
+  /**
+   * Returns whether a cinematic transformation is currently playing.
+   * @returns {boolean}
+   */
+  getIsTransformationActive() {
+    return this.isTransformationActive;
+  }
+
+  /**
+   * Returns current transformation progress [0.0 .. 1.0].
+   * @returns {number}
+   */
+  getTransformationProgress() {
+    return this.transformationProgress;
   }
 
   // ==========================================================================

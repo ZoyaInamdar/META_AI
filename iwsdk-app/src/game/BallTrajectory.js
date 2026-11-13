@@ -208,6 +208,26 @@ export class BallTrajectory {
     }
 
     /**
+     * Direct zero-allocation access to internal velocity object.
+     * Persistent object reused across frames to prevent GC allocations.
+     *
+     * @returns {{ x: number, y: number, z: number }}
+     */
+    get velocity() {
+        return this._velocity;
+    }
+
+    /**
+     * Direct zero-allocation access to internal position object.
+     * Persistent object reused across frames to prevent GC allocations.
+     *
+     * @returns {{ x: number, y: number, z: number }}
+     */
+    get position() {
+        return this._position;
+    }
+
+    /**
      * Current state snapshot.
      * Returns a new defensive copy to prevent external mutation of internal state.
      *

@@ -26,6 +26,7 @@ import {
   Events,
   CupKey,
   CatchType,
+  BallMode,
   BallState,
   CatchResult,
   ScoreEvent,
@@ -129,6 +130,13 @@ export class GameLoop {
     // Staging queues across intra-frame stages (Stage 2 -> Stage 3)
     this._pendingCatchResult = null;
     this._pendingMissFlightId = null;
+
+    // Pre-allocated BallState to eliminate per-frame GC churn
+    this._ballState = new BallState(
+      { x: 0, y: 0, z: 0 },
+      { x: 0, y: 0, z: 0 },
+      this.catchFlow ? this.catchFlow.state : BallMode.SEATED
+    );
 
     // Subscriptions to Person B events
     this._unsubTarget = this.eventBus.on(Events.TARGET, (target) => {
@@ -516,13 +524,14 @@ export class GameLoop {
     this.trajectory.launch(launchPos);
     this.catchFlow.onLaunch(this.trajectory.flightId);
     this.lastTickEvaluatedCatch = false;
+    const trajVel = this.trajectory?.velocity || this.trajectory?.state?.velocity;
     this.lastLaunchInfo = {
       source,
       position: { x: launchPos.x, y: launchPos.y, z: launchPos.z },
       velocity: {
-        x: this.trajectory.state.velocity.x,
-        y: this.trajectory.state.velocity.y,
-        z: this.trajectory.state.velocity.z,
+        x: trajVel ? trajVel.x : 0,
+        y: trajVel ? trajVel.y : 0,
+        z: trajVel ? trajVel.z : 0,
       },
       flightId: this.trajectory.flightId,
       timestamp: typeof performance !== 'undefined' ? performance.now() : Date.now(),
@@ -531,18 +540,38 @@ export class GameLoop {
   }
 
   /**
-   * Retrieves current canonical BallState.
+   * Retrieves current canonical BallState without per-frame allocations.
+   * Mutates and returns a persistent BallState instance to eliminate GC pressure.
    *
    * @returns {BallState}
    */
   getBallState() {
-    const pos = this.catchFlow.ballPosition;
-    const vel = this.trajectory.state.velocity;
-    return new BallState(
-      { x: pos.x, y: pos.y, z: pos.z },
-      { x: vel.x, y: vel.y, z: vel.z },
-      this.catchFlow.state
-    );
+    const pos = this.catchFlow?.ballPosition;
+    const vel = this.trajectory?.velocity || this.trajectory?.state?.velocity;
+    const mode = this.catchFlow?.state || BallMode.SEATED;
+
+    if (!this._ballState) {
+      this._ballState = new BallState(
+        { x: pos ? pos.x : 0, y: pos ? pos.y : 0, z: pos ? pos.z : 0 },
+        { x: vel ? vel.x : 0, y: vel ? vel.y : 0, z: vel ? vel.z : 0 },
+        mode
+      );
+      return this._ballState;
+    }
+
+    if (pos) {
+      this._ballState.position.x = pos.x;
+      this._ballState.position.y = pos.y;
+      this._ballState.position.z = pos.z;
+    }
+    if (vel) {
+      this._ballState.velocity.x = vel.x;
+      this._ballState.velocity.y = vel.y;
+      this._ballState.velocity.z = vel.z;
+    }
+    this._ballState.mode = mode;
+
+    return this._ballState;
   }
 
   /**

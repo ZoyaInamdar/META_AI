@@ -171,6 +171,7 @@ export const PLANETOID_CORE_FRAGMENT_SHADER = /* glsl */ `
 uniform float uTime;
 uniform float uVisualStage;
 uniform float uAwakeningProgress;
+uniform float uTransformationProgress;
 uniform float uKintsugiGlow;
 uniform float uAtmosphereDensity;
 uniform float uOceanFill;
@@ -732,6 +733,10 @@ void main() {
   vec3 viewDir = normalize(vViewPosition);
   vec3 sphereDir = normalize(vLocalPosition);
 
+  // Common view-normal dot product shared across Fresnel, radiance, and shimmer
+  float rawNdotV = dot(norm, viewDir);
+  float NdotV = clamp(rawNdotV, 0.0, 1.0);
+
   // --------------------------------------------------------------------------
   // 1. MACRO GEOLOGICAL STRUCTURE: Low-Frequency Domain Warping + FBM
   // Broad continental swirling with tangential surface vorticity shear (zero extra snoise calls)
@@ -948,74 +953,84 @@ void main() {
   vec3 cAlpinePeak   = vec3(0.78, 0.77, 0.75); // Granite mountain crests
 
   vec3 stage3Land = cCoastSand;
-  stage3Land = mix(stage3Land, cMoistEarth, smoothstep(0.0, 0.15, landGrad));
-  stage3Land = mix(stage3Land, cTemperateRock, smoothstep(0.12, 0.45, landGrad));
-  stage3Land = mix(stage3Land, cHighPlateau, smoothstep(0.40, 0.75, landGrad));
-  stage3Land = mix(stage3Land, cAlpinePeak, smoothstep(0.65, 0.95, landGrad) + smoothstep(0.55, 0.90, ridgeField) * 0.40);
-  stage3Land += fineGrain * vec3(0.18, 0.18, 0.18);
-
-  // Stage 3 Liquid Ocean Simulation
   float oceanDepth = 0.0;
   float oceanSpec = 0.0;
-  float shoreFillActive = (uVisualStage >= 3.0) ? 0.0 : (smoothstep(0.08, 0.50, p23) * (1.0 - smoothstep(0.75, 0.98, p23)));
-  float capillaryRipple = sin(uTime * 4.5 + elevation * 48.0) * 0.5 + 0.5;
   float shoreEdge = 0.0;
   vec3 stage3Ocean = cOceanMidBlue;
+  vec3 stage3Surface = baseCrustColor;
 
-  if (effectiveOceanFill > 0.001) {
-    float waveRipple = sin(dot(sphereDir, vec3(26.0, 32.0, 20.0)) + uTime * 2.2) * (0.02 * min(1.0, effectiveOceanFill * 1.5));
-    oceanDepth = clamp((seaLevel - elevation) * 3.2 + waveRipple, 0.0, 1.0);
+  if (uVisualStage > 2.0 || uOceanFill > 0.001) {
+    stage3Land = mix(stage3Land, cMoistEarth, smoothstep(0.0, 0.15, landGrad));
+    stage3Land = mix(stage3Land, cTemperateRock, smoothstep(0.12, 0.45, landGrad));
+    stage3Land = mix(stage3Land, cHighPlateau, smoothstep(0.40, 0.75, landGrad));
+    stage3Land = mix(stage3Land, cAlpinePeak, smoothstep(0.65, 0.95, landGrad) + smoothstep(0.55, 0.90, ridgeField) * 0.40);
+    stage3Land += fineGrain * vec3(0.18, 0.18, 0.18);
 
-    stage3Ocean = cOceanShallow;
-    stage3Ocean = mix(stage3Ocean, cOceanTealSh, smoothstep(0.04, 0.22, oceanDepth));
-    stage3Ocean = mix(stage3Ocean, cOceanMidBlue, smoothstep(0.20, 0.50, oceanDepth));
-    stage3Ocean = mix(stage3Ocean, cOceanDeepBlue, smoothstep(0.45, 0.80, oceanDepth));
-    stage3Ocean = mix(stage3Ocean, cOceanAbyss, smoothstep(0.75, 1.00, oceanDepth));
+    // Stage 3 Liquid Ocean Simulation
+    float shoreFillActive = (uVisualStage >= 3.0) ? 0.0 : (smoothstep(0.08, 0.50, p23) * (1.0 - smoothstep(0.75, 0.98, p23)));
+    float capillaryRipple = sin(uTime * 4.5 + elevation * 48.0) * 0.5 + 0.5;
 
-    vec3 halfVec = normalize(uLightDirection + viewDir);
-    oceanSpec = pow(clamp(dot(norm, halfVec), 0.0, 1.0), 32.0) * (0.35 + 0.65 * effectiveOceanFill);
-    shoreEdge = smoothstep(0.028, 0.004, abs(elevation - seaLevel)) * (0.30 * effectiveOceanFill + 0.45 * shoreFillActive * capillaryRipple);
+    if (effectiveOceanFill > 0.001) {
+      float waveRipple = sin(dot(sphereDir, vec3(26.0, 32.0, 20.0)) + uTime * 2.2) * (0.02 * min(1.0, effectiveOceanFill * 1.5));
+      oceanDepth = clamp((seaLevel - elevation) * 3.2 + waveRipple, 0.0, 1.0);
+
+      stage3Ocean = cOceanShallow;
+      stage3Ocean = mix(stage3Ocean, cOceanTealSh, smoothstep(0.04, 0.22, oceanDepth));
+      stage3Ocean = mix(stage3Ocean, cOceanMidBlue, smoothstep(0.20, 0.50, oceanDepth));
+      stage3Ocean = mix(stage3Ocean, cOceanDeepBlue, smoothstep(0.45, 0.80, oceanDepth));
+      stage3Ocean = mix(stage3Ocean, cOceanAbyss, smoothstep(0.75, 1.00, oceanDepth));
+
+      vec3 halfVec = normalize(uLightDirection + viewDir);
+      oceanSpec = pow(clamp(dot(norm, halfVec), 0.0, 1.0), 32.0) * (0.35 + 0.65 * effectiveOceanFill);
+      shoreEdge = smoothstep(0.028, 0.004, abs(elevation - seaLevel)) * (0.30 * effectiveOceanFill + 0.45 * shoreFillActive * capillaryRipple);
+    }
+
+    // Composite Stage 3 Surface (Oceanic World: Predominantly Blue Oceans + Exposed Land)
+    stage3Surface = mix(stage3Land, stage3Ocean, isOcean);
+    stage3Surface += (vec3(0.85, 0.95, 1.0) * oceanSpec + cCoastGlint * shoreEdge) * isOcean;
   }
-
-  // Composite Stage 3 Surface (Oceanic World: Predominantly Blue Oceans + Exposed Land)
-  vec3 stage3Surface = mix(stage3Land, stage3Ocean, isOcean);
-  stage3Surface += (vec3(0.85, 0.95, 1.0) * oceanSpec + cCoastGlint * shoreEdge) * isOcean;
 
   // --------------------------------------------------------------------------
   // STAGE 4: LIVING GREEN WORLD
   // Flora colonizes continental land; blue oceans remain preserved!
   // --------------------------------------------------------------------------
-  float bioProg = (uVisualStage >= 4.0) ? 1.0 : smoothstep(0.12, 0.92, p34);
-  float fertility = snoise(sphereDir * 7.5 + warp1 * 0.40) * 0.5 + 0.5;
+  float bioCoverage = 0.0;
+  vec3 stage4Land = stage3Land;
+  vec3 stage4Surface = stage3Surface;
 
-  float coastalProximity = (1.0 - smoothstep(0.04, 0.35, landGrad));
-  float coastalBias = smoothstep(0.12, 0.38, p34) * (1.0 - smoothstep(0.40, 0.70, p34));
-  float valleyBias = (1.0 - ridgeField * 0.65);
+  if (uVisualStage > 3.0) {
+    float bioProg = (uVisualStage >= 4.0) ? 1.0 : smoothstep(0.12, 0.92, p34);
+    float fertility = snoise(sphereDir * 7.5 + warp1 * 0.40) * 0.5 + 0.5;
 
-  float bioSuitability = fertility * (1.15 - landGrad * 0.50) + coastalProximity * coastalBias * 0.40 + valleyBias * 0.20;
-  float bioThreshold = mix(0.92, 0.12, bioProg);
-  float bioCoverage = (uVisualStage <= 3.0) ? 0.0 : smoothstep(bioThreshold, bioThreshold + 0.18, bioSuitability) * bioProg;
+    float coastalProximity = (1.0 - smoothstep(0.04, 0.35, landGrad));
+    float coastalBias = smoothstep(0.12, 0.38, p34) * (1.0 - smoothstep(0.40, 0.70, p34));
+    float valleyBias = (1.0 - ridgeField * 0.65);
 
-  // Vegetation responding to topography: deep forest in valleys, emerald on coasts, moss/fresh on ridges
-  vec3 vegColor = cForest;
-  vegColor = mix(vegColor, cDeepVeg, valleyBias * 0.55);
-  vegColor = mix(vegColor, cEmerald, coastalProximity * 0.70);
-  vegColor = mix(vegColor, cGreen, smoothstep(0.18, 0.55, landGrad));
-  vegColor = mix(vegColor, cMoss, smoothstep(0.45, 0.75, landGrad));
-  vegColor = mix(vegColor, cFreshVeg, smoothstep(0.60, 0.88, landGrad) + smoothstep(0.45, 0.85, ridgeField) * 0.35);
+    float bioSuitability = fertility * (1.15 - landGrad * 0.50) + coastalProximity * coastalBias * 0.40 + valleyBias * 0.20;
+    float bioThreshold = mix(0.92, 0.12, bioProg);
+    bioCoverage = smoothstep(bioThreshold, bioThreshold + 0.18, bioSuitability) * bioProg;
 
-  // Colonized land: rich vegetation canopy with alpine granite crests preserved
-  vec3 stage4Land = mix(stage3Land, vegColor, bioCoverage * 0.88);
-  stage4Land = mix(stage4Land, cAlpinePeak, smoothstep(0.82, 0.98, landGrad) * smoothstep(0.65, 0.95, ridgeField));
+    // Vegetation responding to topography: deep forest in valleys, emerald on coasts, moss/fresh on ridges
+    vec3 vegColor = cForest;
+    vegColor = mix(vegColor, cDeepVeg, valleyBias * 0.55);
+    vegColor = mix(vegColor, cEmerald, coastalProximity * 0.70);
+    vegColor = mix(vegColor, cGreen, smoothstep(0.18, 0.55, landGrad));
+    vegColor = mix(vegColor, cMoss, smoothstep(0.45, 0.75, landGrad));
+    vegColor = mix(vegColor, cFreshVeg, smoothstep(0.60, 0.88, landGrad) + smoothstep(0.45, 0.85, ridgeField) * 0.35);
 
-  // Backward compatibility aliases for existing tests
-  vec3 cCeladon = vec3(0.38, 0.58, 0.48);
-  vec3 biomeHue = vegColor;
-  vec3 landColor = stage4Land;
+    // Colonized land: rich vegetation canopy with alpine granite crests preserved
+    stage4Land = mix(stage3Land, vegColor, bioCoverage * 0.88);
+    stage4Land = mix(stage4Land, cAlpinePeak, smoothstep(0.82, 0.98, landGrad) * smoothstep(0.65, 0.95, ridgeField));
 
-  // Composite Stage 4 Surface: Green Continents + Blue/Teal Oceans
-  vec3 stage4Surface = mix(stage4Land, stage3Ocean, isOcean);
-  stage4Surface += (vec3(0.85, 0.95, 1.0) * oceanSpec + cCoastGlint * shoreEdge) * isOcean;
+    // Backward compatibility aliases for existing tests
+    vec3 cCeladon = vec3(0.38, 0.58, 0.48);
+    vec3 biomeHue = vegColor;
+    vec3 landColor = stage4Land;
+
+    // Composite Stage 4 Surface: Green Continents + Blue/Teal Oceans
+    stage4Surface = mix(stage4Land, stage3Ocean, isOcean);
+    stage4Surface += (vec3(0.85, 0.95, 1.0) * oceanSpec + cCoastGlint * shoreEdge) * isOcean;
+  }
 
   // --------------------------------------------------------------------------
   // CONTINUOUS SURFACE BLENDING ACROSS EPOCHS (Stage 1 -> 2 -> 3 -> 4)
@@ -1140,7 +1155,7 @@ void main() {
       goldenPlanet = mix(internalWarmth, goldenPlanet, smoothstep(0.04, 0.20, elevation));
 
       // 6. Pearlescent Iridescent Flow (view-dependent angle shifts between cyan, lavender, rose)
-      float pearlPhase = dot(norm, viewDir) * 2.8 + sphereDir.y * 1.6 + uTime * 0.12;
+      float pearlPhase = rawNdotV * 2.8 + sphereDir.y * 1.6 + uTime * 0.12;
       vec3 pearlShimmer = mix(
         vec3(0.388, 0.788, 0.910), // Radiant cyan
         vec3(0.718, 0.651, 0.898), // Soft lavender
@@ -1151,11 +1166,11 @@ void main() {
         vec3(0.902, 0.643, 0.722), // Soft rose
         sin(pearlPhase + 2.09) * 0.5 + 0.5
       );
-      float viewFresnel = clamp(1.0 - abs(dot(norm, viewDir)), 0.0, 1.0);
+      float viewFresnel = clamp(1.0 - abs(rawNdotV), 0.0, 1.0);
       goldenPlanet += pearlShimmer * (pow(max(viewFresnel, 0.0), 2.2) * 0.22);
 
       // 7. Central Planetary Radiance (soft ethereal inner luminosity facing camera)
-      float centerLuminance = pow(clamp(dot(norm, viewDir), 0.0, 1.0), 1.8) * 0.18;
+      float centerLuminance = pow(NdotV, 1.8) * 0.18;
       goldenPlanet += vec3(0.85, 0.88, 0.98) * centerLuminance;
 
       // 8. Final Celestial Pulse (4.90 -> 5.00) & Ridge brilliance boost
@@ -1233,6 +1248,39 @@ void main() {
       float harmonicPulse = sin(uTime * (3.4 + 2.4 * celestialEnergy)) * 0.5 + 0.5;
       coreEmission *= (1.0 + (0.40 + 0.30 * harmonicPulse + 0.50 * celestialPulse) * celestialEnergy);
     }
+
+    // Multi-stage Cinematic Transformation Pulses
+    if (uTransformationProgress > 0.001) {
+      if (uVisualStage < 2.05) {
+        // Stage 1 -> 2 (Baseline Preserved): Subtle deep thermal warmth & Climax Golden junction surge
+        // Phase 1 (Charge): Subtle deep thermal warmth (0.0 -> 0.162)
+        float pCharge = clamp(uTransformationProgress / 0.162, 0.0, 1.0);
+        float chargePulse = sin(pCharge * 3.14159) * (1.0 - smoothstep(0.16, 0.20, uTransformationProgress));
+        surfaceColor += cAmberDark * (crackGroove * chargePulse * 0.45);
+
+        // Phase 3 (Climax): Golden junction surge & planetary radiance burst (0.514 -> 0.649)
+        float pClimax = clamp((uTransformationProgress - 0.514) / 0.135, 0.0, 1.0);
+        float climaxPulse = sin(pClimax * 3.14159) * smoothstep(0.50, 0.53, uTransformationProgress) * (1.0 - smoothstep(0.64, 0.67, uTransformationProgress));
+        coreEmission += (junctionHotspot * 1.20 + planetaryPulse * 0.85 + totalSurge * 0.60) * climaxPulse;
+      } else if (uVisualStage < 3.05) {
+        // Stage 2 -> 3: Ocean emergence glistening pulse & shoreline water surge
+        float pOceanPulse = sin(uTransformationProgress * 3.14159);
+        vec3 cOceanShimmer = vec3(0.35, 0.70, 0.95);
+        surfaceColor += cOceanShimmer * (isOcean * pOceanPulse * 0.35 + shoreEdge * 0.45 * pOceanPulse);
+      } else if (uVisualStage < 4.05) {
+        // Stage 3 -> 4: Bio-canopy vitality bloom across continental land
+        float pBioPulse = sin(uTransformationProgress * 3.14159);
+        vec3 cEmeraldBloom = vec3(0.20, 0.78, 0.45);
+        surfaceColor += cEmeraldBloom * (bioCoverage * pBioPulse * 0.30);
+      } else {
+        // Stage 4 -> 5: Celestial harmonic crest resonance
+        float pCelestialSurge = sin(uTransformationProgress * 3.14159);
+        vec3 cWhiteGoldFlare = vec3(0.99, 0.95, 0.88);
+        coreEmission += (junctionHotspot * 1.50 + totalSurge * 1.20) * pCelestialSurge * 0.85;
+        surfaceColor += cWhiteGoldFlare * (pCelestialSurge * 0.22);
+      }
+    }
+
     surfaceColor += moltenVein * coreEmission * veinOceanFactor;
   }
 
@@ -1298,7 +1346,7 @@ void main() {
   float crustAwakenGlow = awakenActivity * (0.12 + 0.08 * awakenPulse);
 
   // Grazing Fresnel rim: thin power curve prevents opaque border appearance
-  float fresnelRim = pow(max(1.0 - abs(dot(norm, viewDir)), 0.0), 4.5);
+  float fresnelRim = pow(max(1.0 - abs(rawNdotV), 0.0), 4.5);
   vec3 cWarmMineralRim = vec3(0.42, 0.22, 0.16); // Subtle warm mineral edge separation against celestial background
   vec3 cColdMineralRim = cWarmMineralRim; // Alias for test/code compatibility
 
@@ -1605,6 +1653,7 @@ export function createPlanetoidCoreMaterial(options = {}) {
       uTime: { value: 0.0 },
       uVisualStage: { value: 1.0 },
       uAwakeningProgress: { value: 0.0 },
+      uTransformationProgress: { value: 0.0 },
       uKintsugiGlow: { value: 0.0 },
       uAtmosphereDensity: { value: 0.0 },
       uOceanFill: { value: 0.0 },
