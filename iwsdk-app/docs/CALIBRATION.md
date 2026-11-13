@@ -58,7 +58,7 @@ Rot X in the emulator panel does not map directly to pitchDeg; read pitchDeg in 
 |---|---|---|---|---|---|
 | 2.0 | 70.6 | 141.2 | 0.754 | 41.0 deg | MISS (edge) |
 | 2.5 | 55.5 | 138.6 | 0.738 | 42.5 deg | MISS (edge) |
-| 3.0 | 55.5 | 166.4 | (fill in) | (fill in) | (fill in) |
+| 3.0 | 55.5 | 166.4 | 0.963 | 15.7 deg | CATCH (CLEAN) |
 | 3.0 | 63.5 | 180 (clamped) | 0.990 | 8.1 deg | CATCH (ASSISTED) |
 
 Real flip needed (tolerance 40 deg, Y >= 0.766): ~71 deg at 2.0x, ~57 deg at 2.5x,
