@@ -163,7 +163,19 @@ export class BinarySystem {
    * @returns {number}
    */
   applyProgradeImpulse(boostDeltaV = this.boostDeltaV) {
-    return applyProgradeImpulse(this.orbitalEngine, this.planetIndex, boostDeltaV);
+    let pIdx = this.planetIndex;
+    if (this.orbitalEngine) {
+      if (!this.orbitalEngine.active[pIdx] || this.orbitalEngine.ids[pIdx] !== 'planet') {
+        for (let i = 0; i < this.orbitalEngine.bodyCount; i++) {
+          if (this.orbitalEngine.active[i] && this.orbitalEngine.ids[i] === 'planet') {
+            pIdx = i;
+            this.planetIndex = i;
+            break;
+          }
+        }
+      }
+    }
+    return applyProgradeImpulse(this.orbitalEngine, pIdx, boostDeltaV);
   }
 
   /**

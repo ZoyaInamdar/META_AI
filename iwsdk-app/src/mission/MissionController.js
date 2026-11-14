@@ -18,7 +18,7 @@
  */
 
 import { MissionState, PlanetState, Events, ChapterTransitionState } from '../contracts/Interfaces.js';
-import { MISSION_THRESHOLDS, CADENCE_CONFIG, TRANSITION_CONFIG } from './missionConfig.js';
+import { MISSION_THRESHOLDS, CADENCE_CONFIG, TRANSITION_CONFIG, BINARY_CONFIG } from './missionConfig.js';
 import { TrickSequencer } from './TrickSequencer.js';
 import { setupChapter2Binary, applyProgradeImpulse, computeThreeBodyAlignment } from '../physics/BinarySystem.js';
 import { FinaleManager } from '../physics/FinaleManager.js';
@@ -101,6 +101,19 @@ export class MissionController {
     if (this.eventBus && typeof this.eventBus.on === 'function' && options.autoSubscribe !== false) {
       this.subscribeToEventBus(this.eventBus);
     }
+
+    // Lightweight Cadence-Resonance Telemetry (Step 3)
+    this._cadenceTelemetry = {
+      lastCatchDeltaSeconds: 0.0,
+      targetCadenceSeconds: CADENCE_CONFIG.TARGET_INTERVAL,
+      deviationMs: 0.0,
+      onBeatHitRate: 1.0,
+      currentSemiMajorAxis: BINARY_CONFIG?.PLANET_ORBIT_RADIUS ?? 2.4,
+      totalChapter2Catches: 0,
+      onBeatChapter2Catches: 0
+    };
+    this._lastScoreTimestampMs = null;
+    this._lastScoreSimTime = null;
   }
 
   /**
@@ -395,20 +408,99 @@ export class MissionController {
       this.cosmicEnergy += awardedEnergy;
       this._updateChapterProgress();
 
-      // In Chapter 2, check for on-cadence catch to apply prograde impulse
-      const isOnCadence = Boolean(
-        typeof scoreEvent === 'object' && scoreEvent !== null && (
-          scoreEvent.isOnCadence ||
-          scoreEvent.cadenceMultiplier > 1.0 ||
-          scoreEvent.multipliers?.cadence > 1.0
-        )
-      );
+      // In Chapter 2, track rolling cadence telemetry and evaluate on-cadence impulse
+      if (this.chapter === 2) {
+        let deltaSec = 0.0;
+        if (typeof scoreEvent === 'object' && scoreEvent !== null) {
+          if (Number.isFinite(scoreEvent.deltaSeconds)) {
+            deltaSec = scoreEvent.deltaSeconds;
+          } else if (Number.isFinite(scoreEvent.deltaMs)) {
+            deltaSec = scoreEvent.deltaMs / 1000.0;
+          } else if (Number.isFinite(scoreEvent.intervalSeconds)) {
+            deltaSec = scoreEvent.intervalSeconds;
+          } else if (Number.isFinite(scoreEvent.timestampMs)) {
+            if (this._lastScoreTimestampMs !== null) {
+              deltaSec = (scoreEvent.timestampMs - this._lastScoreTimestampMs) / 1000.0;
+            }
+            this._lastScoreTimestampMs = scoreEvent.timestampMs;
+          } else if (Number.isFinite(scoreEvent.timestamp)) {
+            const tMs = scoreEvent.timestamp > 1e10 ? scoreEvent.timestamp : scoreEvent.timestamp * 1000;
+            if (this._lastScoreTimestampMs !== null) {
+              deltaSec = (tMs - this._lastScoreTimestampMs) / 1000.0;
+            }
+            this._lastScoreTimestampMs = tMs;
+          } else if (this.orbitalEngine) {
+            const simTime = this.orbitalEngine.simulationTime;
+            if (this._lastScoreSimTime !== null) {
+              deltaSec = simTime - this._lastScoreSimTime;
+            }
+            this._lastScoreSimTime = simTime;
+          }
+        }
 
-      if (isOnCadence && this.chapter === 2) {
-        if (this.binarySystem) {
-          this.binarySystem.applyProgradeImpulse();
-        } else if (this.orbitalEngine) {
-          applyProgradeImpulse(this.orbitalEngine, 2, 0.05);
+        const targetSec = CADENCE_CONFIG.TARGET_INTERVAL; // 1.75
+        let devMs = 0.0;
+        if (deltaSec > 0.0) {
+          devMs = Math.abs(deltaSec - targetSec) * 1000.0;
+        } else if (typeof scoreEvent === 'object' && scoreEvent !== null && Number.isFinite(scoreEvent.deviationMs)) {
+          devMs = scoreEvent.deviationMs;
+        }
+
+        const isOnCadence = Boolean(
+          typeof scoreEvent === 'object' && scoreEvent !== null && (
+            scoreEvent.isOnCadence ||
+            scoreEvent.cadenceMultiplier > 1.0 ||
+            scoreEvent.multipliers?.cadence > 1.0 ||
+            (deltaSec > 0.0 && devMs <= (CADENCE_CONFIG.WINDOW_TOLERANCE * 1000.0 + 1e-6))
+          )
+        );
+
+        this._cadenceTelemetry.totalChapter2Catches++;
+        if (isOnCadence) {
+          this._cadenceTelemetry.onBeatChapter2Catches++;
+        }
+
+        this._cadenceTelemetry.lastCatchDeltaSeconds = deltaSec;
+        this._cadenceTelemetry.targetCadenceSeconds = targetSec;
+        this._cadenceTelemetry.deviationMs = devMs;
+        this._cadenceTelemetry.onBeatHitRate = this._cadenceTelemetry.totalChapter2Catches > 0
+          ? this._cadenceTelemetry.onBeatChapter2Catches / this._cadenceTelemetry.totalChapter2Catches
+          : 1.0;
+
+        if (isOnCadence) {
+          const isAlreadyStabilized = this.chapterState === ChapterTransitionState.CHAPTER_2_STABILIZED ||
+            (this._cadenceTelemetry.currentSemiMajorAxis >= 3.25);
+
+          if (!isAlreadyStabilized) {
+            if (this.binarySystem) {
+              this.binarySystem.applyProgradeImpulse();
+            } else if (this.orbitalEngine) {
+              applyProgradeImpulse(this.orbitalEngine, 2, 0.05);
+            }
+          }
+        }
+
+        // Update currentSemiMajorAxis telemetry if orbitalEngine is attached
+        if (this.orbitalEngine) {
+          const pIdx = this._findPlanetIndex();
+          if (pIdx !== -1) {
+            const i3 = pIdx * 3;
+            const px = this.orbitalEngine.positions[i3];
+            const py = this.orbitalEngine.positions[i3 + 1];
+            const pz = this.orbitalEngine.positions[i3 + 2];
+            const vx = this.orbitalEngine.velocities[i3];
+            const vy = this.orbitalEngine.velocities[i3 + 1];
+            const vz = this.orbitalEngine.velocities[i3 + 2];
+            const r = Math.sqrt(px * px + py * py + pz * pz);
+            const vSq = vx * vx + vy * vy + vz * vz;
+            const mu = 2.0; // Total central binary mass G * (m1 + m2)
+            const eps = 0.5 * vSq - mu / r;
+            if (eps < -1e-6) {
+              this._cadenceTelemetry.currentSemiMajorAxis = -mu / (2.0 * eps);
+            } else {
+              this._cadenceTelemetry.currentSemiMajorAxis = r;
+            }
+          }
         }
       }
     }
@@ -850,6 +942,24 @@ export class MissionController {
   }
 
   /**
+   * Returns live cadence-resonance telemetry diagnostics for VR/emulator sessions.
+   * Zero heap allocations: returns the internal diagnostic structure.
+   *
+   * @returns {{
+   *   lastCatchDeltaSeconds: number,
+   *   targetCadenceSeconds: number,
+   *   deviationMs: number,
+   *   onBeatHitRate: number,
+   *   currentSemiMajorAxis: number,
+   *   totalChapter2Catches: number,
+   *   onBeatChapter2Catches: number
+   * }}
+   */
+  getCadenceTelemetry() {
+    return this._cadenceTelemetry;
+  }
+
+  /**
    * Returns whether Chapter 1 -> Chapter 2 orbital blending is currently active.
    * @returns {boolean}
    */
@@ -947,6 +1057,17 @@ export class MissionController {
 
     this.processedScoreEvents.clear();
     this.processedMissEvents.clear();
+
+    // Reset cadence telemetry
+    this._cadenceTelemetry.lastCatchDeltaSeconds = 0.0;
+    this._cadenceTelemetry.targetCadenceSeconds = CADENCE_CONFIG.TARGET_INTERVAL;
+    this._cadenceTelemetry.deviationMs = 0.0;
+    this._cadenceTelemetry.onBeatHitRate = 1.0;
+    this._cadenceTelemetry.currentSemiMajorAxis = BINARY_CONFIG?.PLANET_ORBIT_RADIUS ?? 2.4;
+    this._cadenceTelemetry.totalChapter2Catches = 0;
+    this._cadenceTelemetry.onBeatChapter2Catches = 0;
+    this._lastScoreTimestampMs = null;
+    this._lastScoreSimTime = null;
 
     if (this.finaleManager) {
       this.finaleManager.reset();
