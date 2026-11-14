@@ -126,6 +126,18 @@ export class TrickSequencer {
   }
 
   /**
+   * Emits current TargetState snapshot onto the EventBus if configured.
+   * @returns {TargetState}
+   */
+  emitCurrentTarget() {
+    const snapshot = this.getCurrentTarget();
+    if (this.eventBus && typeof this.eventBus.emit === 'function') {
+      this.eventBus.emit(Events.TARGET, snapshot);
+    }
+    return snapshot;
+  }
+
+  /**
    * Returns the next target cup that will follow if the current cup is caught.
    * @returns {string}
    */

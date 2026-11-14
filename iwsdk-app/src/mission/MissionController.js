@@ -42,6 +42,7 @@ export class MissionController {
     this.orbitalEngine = options.orbitalEngine || null;
     this.binarySystem = options.binarySystem || null;
     this.finaleManager = options.finaleManager || new FinaleManager(eventBus, { orbitalEngine: this.orbitalEngine });
+    this.captureBurn = options.captureBurn || null;
     this.smoothingLambda = Number.isFinite(options.smoothingLambda) ? options.smoothingLambda : 5.0;
 
     // Mission State variables
@@ -94,6 +95,12 @@ export class MissionController {
     this.atmosphereDensityTarget = 0.0;
     this.oceanFillLevelTarget = 0.0;
     this.ringFormationAlphaTarget = 0.0;
+
+    // Auto-subscribe to EventBus for score, catch, and miss events
+    this._isSubscribedToBus = false;
+    if (this.eventBus && typeof this.eventBus.on === 'function' && options.autoSubscribe !== false) {
+      this.subscribeToEventBus(this.eventBus);
+    }
   }
 
   /**
@@ -253,7 +260,12 @@ export class MissionController {
       this.trickSequencer.setChapter(this.chapter);
 
       if (this.chapter === 2) {
-        this.startTransitionToBinary();
+        if (this.captureBurn) {
+          const pIdx = this._findPlanetIndex();
+          this.captureBurn.triggerBurn(pIdx !== -1 ? pIdx : 1, 0.5, 1.0);
+        } else {
+          this.startTransitionToBinary();
+        }
       } else if (this.chapter === 3) {
         this.chapterState = 'CHAPTER_3';
         this._isTransitioning = false;
@@ -424,6 +436,22 @@ export class MissionController {
   }
 
   /**
+   * Connects a CaptureBurn instance to the mission controller.
+   * @param {Object} captureBurn
+   */
+  setCaptureBurn(captureBurn) {
+    this.captureBurn = captureBurn;
+  }
+
+  /**
+   * Returns connected CaptureBurn instance.
+   * @returns {Object|null}
+   */
+  getCaptureBurn() {
+    return this.captureBurn;
+  }
+
+  /**
    * Directly sets the active mission chapter (1 to 4).
    *
    * @param {number} chapterIndex
@@ -554,6 +582,14 @@ export class MissionController {
       this.oceanFillLevel = Math.min(1.0, Math.max(0.0, this.oceanFillLevel));
       this.ringFormationAlpha = Math.min(1.0, Math.max(0.0, this.ringFormationAlpha));
 
+      // Handle active Chapter 1 retrograde capture burn
+      if (this.captureBurn && this.captureBurn.isActive) {
+        this.captureBurn.update(dt, this.orbitalEngine);
+        if (!this.captureBurn.isActive) {
+          this.startTransitionToBinary();
+        }
+      }
+
       // Handle active Chapter 1 -> Chapter 2 transition blending
       if (this._isTransitioning) {
         this.transitionElapsed += dt;
@@ -669,6 +705,10 @@ export class MissionController {
     const missionState = this.getMissionState();
     const planetState = this.getPlanetState();
 
+    if (this.eventBus && typeof this.eventBus.emit === 'function') {
+      this.eventBus.emit(Events.PLANET, planetState);
+    }
+
     return { missionState, planetState };
   }
 
@@ -754,11 +794,59 @@ export class MissionController {
   }
 
   /**
+   * Subscribes to score, catch, and miss events on the designated EventBus.
+   * Idempotent; guards against multiple registrations.
+   *
+   * @param {Object} [eventBus=this.eventBus]
+   * @returns {Function|null} Unsubscribe function, or null if unattached
+   */
+  subscribeToEventBus(eventBus = this.eventBus) {
+    if (!eventBus || typeof eventBus.on !== 'function') return null;
+    if (this._isSubscribedToBus) return null;
+    this._isSubscribedToBus = true;
+
+    const unsubCatch = eventBus.on(Events.CATCH, (c) => this.handleCatch(c));
+    const unsubScore = eventBus.on(Events.SCORE, (s) => this.handleScore(s));
+    const unsubMiss = eventBus.on(Events.MISS, (m) => this.handleMiss(m));
+
+    return () => {
+      this._isSubscribedToBus = false;
+      if (typeof unsubCatch === 'function') unsubCatch();
+      if (typeof unsubScore === 'function') unsubScore();
+      if (typeof unsubMiss === 'function') unsubMiss();
+    };
+  }
+
+  /**
    * Returns the current TargetState from the trick sequencer.
    * @returns {Object}
    */
   getCurrentTarget() {
     return this.trickSequencer.getCurrentTarget();
+  }
+
+  /**
+   * Returns the current TargetState from the trick sequencer.
+   * Contract alias used by Person C WorldRenderer and GamePipeline snapshot dispatch.
+   * @returns {Object}
+   */
+  getTargetState() {
+    return this.getCurrentTarget();
+  }
+
+  /**
+   * Emits the current TargetState onto the EventBus.
+   * @returns {Object}
+   */
+  emitCurrentTarget() {
+    if (this.trickSequencer && typeof this.trickSequencer.emitCurrentTarget === 'function') {
+      return this.trickSequencer.emitCurrentTarget();
+    }
+    const target = this.getCurrentTarget();
+    if (this.eventBus && typeof this.eventBus.emit === 'function') {
+      this.eventBus.emit(Events.TARGET, target);
+    }
+    return target;
   }
 
   /**
@@ -862,6 +950,10 @@ export class MissionController {
 
     if (this.finaleManager) {
       this.finaleManager.reset();
+    }
+
+    if (this.captureBurn) {
+      this.captureBurn.reset();
     }
 
     this.trickSequencer.reset();

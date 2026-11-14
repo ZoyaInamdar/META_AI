@@ -58,6 +58,13 @@ import {
   getChapterConfig
 } from './mission/missionConfig.js';
 
+import { MissionController } from './mission/MissionController.js';
+import { TrickSequencer } from './mission/TrickSequencer.js';
+import { OrbitalEngine } from './physics/OrbitalEngine.js';
+import { BinarySystem } from './physics/BinarySystem.js';
+import { CaptureBurn } from './physics/CaptureBurn.js';
+import { GameLoop } from './game/GameLoop.js';
+
 // Safe dynamic Three.js loading supporting both browser/bundler and Node headless test runtimes
 let THREE = globalThis.THREE;
 if (!THREE) {
@@ -321,6 +328,7 @@ export class GamePipeline {
    * @param {any} [options.missionController]
    * @param {any} [options.orbitalEngine]
    * @param {any} [options.worldRenderer]
+   * @param {any} [options.gameLoop]
    * @param {number} [options.fixedDelta=PHYSICS_TIMESTEP.FIXED_DELTA]
    * @param {number} [options.maxAccumulatedFrames=MAX_ACCUMULATED_FRAMES]
    * @param {number} [options.maxDeltaTime=MAX_DELTA_TIME]
@@ -329,12 +337,56 @@ export class GamePipeline {
     this.eventBus = options.eventBus || defaultEventBus;
     this.gameplayKenGroup = options.gameplayKenGroup || gameplayKenGroup;
 
+    // Optional GameLoop reference
+    this.gameLoop = options.gameLoop || null;
+
     // Subsystems
-    this.inputSystem = options.inputSystem || new DefaultInputSystem();
-    this.catchDetector = options.catchDetector || new DefaultCatchDetector(this.eventBus);
-    this.scoreManager = options.scoreManager || new DefaultScoreManager(this.eventBus);
-    this.missionController = options.missionController || new DefaultMissionController(this.eventBus);
-    this.orbitalEngine = options.orbitalEngine || new DefaultOrbitalEngine(this.eventBus);
+    this.inputSystem = options.inputSystem || (this.gameLoop && this.gameLoop.inputSystem) || new DefaultInputSystem();
+    this.catchDetector = options.catchDetector || (this.gameLoop && this.gameLoop.catchDetector) || new DefaultCatchDetector(this.eventBus);
+    this.scoreManager = options.scoreManager || (this.gameLoop && this.gameLoop.scoreManager) || new DefaultScoreManager(this.eventBus);
+
+    // Orbital Engine: Real production instance with Chapter 1 initial configuration unless overridden
+    if (options.orbitalEngine) {
+      this.orbitalEngine = options.orbitalEngine;
+    } else {
+      const engine = new OrbitalEngine();
+      engine.setBody(0, 'star_1', 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, true);
+      engine.setBody(1, 'planet', 1e-6, 1.0, 0.0, 0.0, 0.0, 1.55, 0.0, false);
+      this.orbitalEngine = engine;
+    }
+
+    // Mission Controller: Real production instance with TrickSequencer, BinarySystem, CaptureBurn unless overridden
+    if (options.missionController) {
+      this.missionController = options.missionController;
+    } else {
+      const trickSequencer = options.trickSequencer || new TrickSequencer(this.eventBus);
+      const captureBurn = new CaptureBurn(this.eventBus);
+      const binarySystem = new BinarySystem(this.orbitalEngine);
+      this.missionController = new MissionController(this.eventBus, {
+        trickSequencer,
+        orbitalEngine: this.orbitalEngine,
+        binarySystem,
+        captureBurn
+      });
+    }
+
+    // Wire intra-frame scoring, catch, and miss event listeners to MissionController
+    if (this.eventBus && typeof this.eventBus.on === 'function') {
+      if (typeof this.missionController.subscribeToEventBus === 'function') {
+        this.missionController.subscribeToEventBus(this.eventBus);
+      } else {
+        if (typeof this.missionController.handleCatch === 'function') {
+          this.eventBus.on(Events.CATCH, (c) => this.missionController.handleCatch(c));
+        }
+        if (typeof this.missionController.handleScore === 'function') {
+          this.eventBus.on(Events.SCORE, (s) => this.missionController.handleScore(s));
+        }
+        if (typeof this.missionController.handleMiss === 'function') {
+          this.eventBus.on(Events.MISS, (m) => this.missionController.handleMiss(m));
+        }
+      }
+    }
+
     this.worldRenderer = options.worldRenderer || new DefaultWorldRenderer();
 
     // Timing constants
@@ -351,6 +403,31 @@ export class GamePipeline {
     // Execution trace logger for verification testing
     this.executionLog = [];
     this.enableTracing = false;
+
+    // If gameLoop was provided during construction, emit initial target so gameLoop.activeTargetCup becomes 'big'
+    if (this.gameLoop && this.missionController) {
+      this.emitInitialTarget();
+    }
+  }
+
+  /**
+   * Helper to emit current target on eventBus (sets GameLoop.activeTargetCup to 'big').
+   * @returns {TargetState|null}
+   */
+  emitInitialTarget() {
+    if (this.missionController) {
+      if (typeof this.missionController.emitCurrentTarget === 'function') {
+        return this.missionController.emitCurrentTarget();
+      }
+      if (typeof this.missionController.getTargetState === 'function') {
+        const target = this.missionController.getTargetState();
+        if (this.eventBus && typeof this.eventBus.emit === 'function') {
+          this.eventBus.emit(Events.TARGET, target);
+        }
+        return target;
+      }
+    }
+    return null;
   }
 
   /**
@@ -499,11 +576,31 @@ export function tick(timestamp, xrFrame = null, forcedDelta = null) {
  * Hooks into requestAnimationFrame or IWSDK render hooks.
  *
  * @param {Object} [options={}]
- * @returns {{ pipeline: GamePipeline, gameplayKenGroup: any, eventBus: EventBus, stop: Function, tick: Function }}
+ * @returns {{ pipeline: GamePipeline, gameLoop: any, gameplayKenGroup: any, eventBus: EventBus, stop: Function, tick: Function }}
  */
 export function initGame(options = {}) {
   const bus = options.eventBus || defaultEventBus;
-  const pipeline = new GamePipeline({ ...options, eventBus: bus });
+  const kenGroup = options.gameplayKenGroup || gameplayKenGroup;
+
+  let gameLoop = options.gameLoop || null;
+  // If no gameLoop provided and no specific facet mocks provided, create the production GameLoop
+  if (!gameLoop && options.useGameLoop !== false && !options.catchDetector && !options.scoreManager && !options.inputSystem) {
+    gameLoop = new GameLoop({
+      eventBus: bus,
+      gameplayKenGroup: kenGroup,
+      ...(options.gameLoopOptions || {})
+    });
+  }
+
+  const pipeline = new GamePipeline({
+    ...options,
+    eventBus: bus,
+    gameplayKenGroup: kenGroup,
+    gameLoop
+  });
+
+  // Ensure initial target is emitted immediately after GameLoop is subscribed
+  pipeline.emitInitialTarget();
 
   let isRunning = true;
   let rafId = null;
@@ -522,6 +619,7 @@ export function initGame(options = {}) {
 
   return {
     pipeline,
+    gameLoop,
     gameplayKenGroup: pipeline.gameplayKenGroup,
     eventBus: bus,
     tick: (time, xrFrame, forcedDt) => pipeline.tick(time, xrFrame, forcedDt),
@@ -529,6 +627,9 @@ export function initGame(options = {}) {
       isRunning = false;
       if (rafId !== null && typeof cancelAnimationFrame === 'function') {
         cancelAnimationFrame(rafId);
+      }
+      if (gameLoop && typeof gameLoop.dispose === 'function') {
+        gameLoop.dispose();
       }
     }
   };
