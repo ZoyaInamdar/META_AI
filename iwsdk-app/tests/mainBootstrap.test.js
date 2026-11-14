@@ -25,10 +25,11 @@ import { TrickSequencer } from '../src/mission/TrickSequencer.js';
 import { OrbitalEngine } from '../src/physics/OrbitalEngine.js';
 import { BinarySystem } from '../src/physics/BinarySystem.js';
 import { CaptureBurn } from '../src/physics/CaptureBurn.js';
+import { FinaleManager } from '../src/physics/FinaleManager.js';
 import { GameLoop } from '../src/game/GameLoop.js';
 import { EventBus } from '../src/contracts/EventBus.js';
 import { Events, CupKey, TrickType, CatchType } from '../src/contracts/Interfaces.js';
-import { MISSION_THRESHOLDS } from '../src/mission/missionConfig.js';
+import { MISSION_THRESHOLDS, COSMIC_SCALE } from '../src/mission/missionConfig.js';
 
 describe('Production Subsystem Bootstrap (main.js)', () => {
   let eventBus;
@@ -76,14 +77,30 @@ describe('Production Subsystem Bootstrap (main.js)', () => {
       expect(planetVel.z).toBeCloseTo(0.0);
     });
 
-    it('MissionController is wired with real TrickSequencer, BinarySystem, and CaptureBurn', () => {
+    it('MissionController is wired with real TrickSequencer, BinarySystem, CaptureBurn, and FinaleManager', () => {
       const pipeline = new GamePipeline({ eventBus });
       const mc = pipeline.missionController;
 
       expect(mc.trickSequencer).toBeInstanceOf(TrickSequencer);
       expect(mc.binarySystem).toBeInstanceOf(BinarySystem);
       expect(mc.captureBurn).toBeInstanceOf(CaptureBurn);
+      expect(mc.finaleManager).toBeInstanceOf(FinaleManager);
+      expect(mc.getFinaleManager()).toBeInstanceOf(FinaleManager);
+      expect(typeof mc.isChaosActive).toBe('function');
       expect(mc.orbitalEngine).toBe(pipeline.orbitalEngine);
+    });
+
+    it('initGame() with no arguments constructs real production subsystems and sets activeTargetCup to "big"', () => {
+      // Call initGame with literally no arguments
+      const game = initGame();
+
+      expect(game.pipeline).toBeInstanceOf(GamePipeline);
+      expect(game.pipeline.missionController).toBeInstanceOf(MissionController);
+      expect(game.pipeline.orbitalEngine).toBeInstanceOf(OrbitalEngine);
+      expect(game.gameLoop).toBeInstanceOf(GameLoop);
+      expect(game.gameLoop.activeTargetCup).toBe(CupKey.BIG);
+
+      game.stop();
     });
 
     it('initGame() constructs real production subsystems and returns gameLoop and pipeline', () => {
@@ -95,6 +112,35 @@ describe('Production Subsystem Bootstrap (main.js)', () => {
       expect(game.gameLoop).toBeInstanceOf(GameLoop);
 
       game.stop();
+    });
+
+    it('respects COSMIC_SCALE.WORLD_SCALE (10.0) for exposed body coordinates', () => {
+      const pipeline = new GamePipeline({ eventBus });
+      const engine = pipeline.orbitalEngine;
+
+      // Planet initial sim pos is (1.0, 0.0, 0.0)
+      const simPos = engine.getBodyPosition(1);
+      expect(simPos.x).toBeCloseTo(1.0);
+      expect(simPos.y).toBeCloseTo(0.0);
+      expect(simPos.z).toBeCloseTo(0.0);
+
+      // World pos: (simPos * 10.0) + skyOrigin ({ 0.0, 1.2, -3.5 })
+      const worldPos = engine.getBodyWorldPosition(1);
+      expect(worldPos.x).toBeCloseTo(1.0 * COSMIC_SCALE.WORLD_SCALE + COSMIC_SCALE.SKY_ORIGIN.x);
+      expect(worldPos.y).toBeCloseTo(0.0 * COSMIC_SCALE.WORLD_SCALE + COSMIC_SCALE.SKY_ORIGIN.y);
+      expect(worldPos.z).toBeCloseTo(0.0 * COSMIC_SCALE.WORLD_SCALE + COSMIC_SCALE.SKY_ORIGIN.z);
+
+      // Also unshifted world position
+      const unshifted = engine.getBodyWorldPosition(1, null, false);
+      expect(unshifted.x).toBeCloseTo(10.0);
+      expect(unshifted.y).toBeCloseTo(0.0);
+      expect(unshifted.z).toBeCloseTo(0.0);
+
+      // PhysicsState snapshot exposes worldScale, skyOrigin, and worldPos per body
+      const physState = engine.getPhysicsState();
+      expect(physState.worldScale).toBe(10.0);
+      expect(physState.skyOrigin.y).toBeCloseTo(1.2);
+      expect(physState.bodies[1].worldPos.x).toBeCloseTo(10.0);
     });
   });
 
@@ -231,6 +277,39 @@ describe('Production Subsystem Bootstrap (main.js)', () => {
       expect(burn.isActive).toBe(true);
 
       game.stop();
+    });
+
+    it('GamePipeline.tick(1 / 72) advances the 120 Hz physics accumulator without NaN values', () => {
+      const pipeline = new GamePipeline({ eventBus });
+
+      // Run 72 frames (1 simulated second at 72 Hz)
+      for (let frame = 1; frame <= 72; frame++) {
+        pipeline.tick(frame * (1000 / 72), null, 1 / 72);
+      }
+
+      // Physics stepped at 120 Hz: in 1 second (72 * 1/72 = 1.0s), exactly 120 steps executed
+      expect(pipeline.totalPhysicsSteps).toBe(120);
+
+      // Verify no NaNs in physics state
+      const physState = pipeline.orbitalEngine.getPhysicsState();
+      expect(Number.isFinite(physState.simTime)).toBe(true);
+      expect(physState.bodies.length).toBe(2);
+
+      for (const body of physState.bodies) {
+        expect(Number.isFinite(body.pos.x)).toBe(true);
+        expect(Number.isFinite(body.pos.y)).toBe(true);
+        expect(Number.isFinite(body.pos.z)).toBe(true);
+        expect(Number.isFinite(body.vel.x)).toBe(true);
+        expect(Number.isFinite(body.vel.y)).toBe(true);
+        expect(Number.isFinite(body.vel.z)).toBe(true);
+        expect(Number.isFinite(body.worldPos.x)).toBe(true);
+        expect(Number.isFinite(body.worldPos.y)).toBe(true);
+        expect(Number.isFinite(body.worldPos.z)).toBe(true);
+      }
+
+      // Planet position has moved smoothly from initial (1.0, 0, 0)
+      const planetPos = pipeline.orbitalEngine.getBodyPosition(1);
+      expect(planetPos.y).toBeGreaterThan(0.0);
     });
   });
 

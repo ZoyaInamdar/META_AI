@@ -55,6 +55,7 @@ import {
   MISSION_THRESHOLDS,
   CHAPTER_CONFIG,
   CADENCE_CONFIG,
+  COSMIC_SCALE,
   getChapterConfig
 } from './mission/missionConfig.js';
 
@@ -63,6 +64,7 @@ import { TrickSequencer } from './mission/TrickSequencer.js';
 import { OrbitalEngine } from './physics/OrbitalEngine.js';
 import { BinarySystem } from './physics/BinarySystem.js';
 import { CaptureBurn } from './physics/CaptureBurn.js';
+import { FinaleManager } from './physics/FinaleManager.js';
 import { GameLoop } from './game/GameLoop.js';
 
 // Safe dynamic Three.js loading supporting both browser/bundler and Node headless test runtimes
@@ -355,18 +357,20 @@ export class GamePipeline {
       this.orbitalEngine = engine;
     }
 
-    // Mission Controller: Real production instance with TrickSequencer, BinarySystem, CaptureBurn unless overridden
+    // Mission Controller: Real production instance with TrickSequencer, BinarySystem, CaptureBurn, FinaleManager unless overridden
     if (options.missionController) {
       this.missionController = options.missionController;
     } else {
       const trickSequencer = options.trickSequencer || new TrickSequencer(this.eventBus);
-      const captureBurn = new CaptureBurn(this.eventBus);
-      const binarySystem = new BinarySystem(this.orbitalEngine);
+      const captureBurn = options.captureBurn || new CaptureBurn(this.eventBus);
+      const binarySystem = options.binarySystem || new BinarySystem(this.orbitalEngine);
+      const finaleManager = options.finaleManager || new FinaleManager(this.eventBus, { orbitalEngine: this.orbitalEngine });
       this.missionController = new MissionController(this.eventBus, {
         trickSequencer,
         orbitalEngine: this.orbitalEngine,
         binarySystem,
-        captureBurn
+        captureBurn,
+        finaleManager
       });
     }
 
@@ -529,6 +533,8 @@ export class GamePipeline {
       targetState: Object.freeze({ ...this.missionController.getTargetState() }),
       ballState: this.catchDetector.getBallState ? Object.freeze({ ...this.catchDetector.getBallState() }) : null,
       gameplayKenGroup: this.gameplayKenGroup,
+      worldScale: COSMIC_SCALE.WORLD_SCALE,
+      skyOrigin: COSMIC_SCALE.SKY_ORIGIN,
       timestamp,
       dtClamped
     });

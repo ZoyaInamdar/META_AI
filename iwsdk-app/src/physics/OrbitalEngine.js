@@ -39,6 +39,7 @@
  */
 
 import { PhysicsState } from '../contracts/Interfaces.js';
+import { COSMIC_SCALE } from '../mission/missionConfig.js';
 
 export class OrbitalEngine {
   /**
@@ -92,6 +93,7 @@ export class OrbitalEngine {
       mass: 0.0,
       pos: { x: 0.0, y: 0.0, z: 0.0 },
       vel: { x: 0.0, y: 0.0, z: 0.0 },
+      worldPos: { x: 0.0, y: 0.0, z: 0.0 },
       fixed: false
     }));
 
@@ -100,6 +102,8 @@ export class OrbitalEngine {
       substepCount: 1,
       bodies: []
     });
+    this._physicsState.worldScale = COSMIC_SCALE.WORLD_SCALE;
+    this._physicsState.skyOrigin = COSMIC_SCALE.SKY_ORIGIN;
 
     // Tracking & Adaptive Substepping
     this.bodyCount = 0;
@@ -583,6 +587,39 @@ export class OrbitalEngine {
   }
 
   /**
+   * Reads body world position in VR space applying COSMIC_SCALE.WORLD_SCALE (10.0)
+   * and optional COSMIC_SCALE.SKY_ORIGIN offset.
+   * Writes into targetVector3 if provided (zero allocation); otherwise returns a new { x, y, z } object.
+   *
+   * @param {number} index - Body slot index
+   * @param {{ x: number, y: number, z: number }} [targetVector3=null]
+   * @param {boolean} [applySkyOrigin=true]
+   * @returns {{ x: number, y: number, z: number } | null}
+   */
+  getBodyWorldPosition(index, targetVector3 = null, applySkyOrigin = true) {
+    if (index < 0 || index >= this.maxBodies || !this.active[index]) {
+      return null;
+    }
+    const i3 = index * 3;
+    const scale = COSMIC_SCALE.WORLD_SCALE;
+    const ox = applySkyOrigin ? COSMIC_SCALE.SKY_ORIGIN.x : 0.0;
+    const oy = applySkyOrigin ? COSMIC_SCALE.SKY_ORIGIN.y : 0.0;
+    const oz = applySkyOrigin ? COSMIC_SCALE.SKY_ORIGIN.z : 0.0;
+
+    const wx = this.positions[i3] * scale + ox;
+    const wy = this.positions[i3 + 1] * scale + oy;
+    const wz = this.positions[i3 + 2] * scale + oz;
+
+    if (targetVector3) {
+      targetVector3.x = wx;
+      targetVector3.y = wy;
+      targetVector3.z = wz;
+      return targetVector3;
+    }
+    return { x: wx, y: wy, z: wz };
+  }
+
+  /**
    * Reads body velocity. Writes into targetVector3 if provided (zero allocation);
    * otherwise returns a new { x, y, z } object.
    *
@@ -667,6 +704,9 @@ export class OrbitalEngine {
     this._physicsState.substeps = this.substeps;
 
     let activeIdx = 0;
+    const worldScale = COSMIC_SCALE.WORLD_SCALE;
+    const skyOrigin = COSMIC_SCALE.SKY_ORIGIN;
+
     for (let i = 0; i < this.bodyCount; i++) {
       if (!this.active[i]) continue;
       const b = this._physicsBodiesPool[activeIdx];
@@ -679,6 +719,9 @@ export class OrbitalEngine {
       b.vel.x = this.velocities[i3];
       b.vel.y = this.velocities[i3 + 1];
       b.vel.z = this.velocities[i3 + 2];
+      b.worldPos.x = this.positions[i3] * worldScale + skyOrigin.x;
+      b.worldPos.y = this.positions[i3 + 1] * worldScale + skyOrigin.y;
+      b.worldPos.z = this.positions[i3 + 2] * worldScale + skyOrigin.z;
       b.fixed = this.fixed[i] === 1;
       activeIdx++;
     }
