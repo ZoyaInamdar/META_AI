@@ -86,6 +86,9 @@ export class BallTrajectory {
         // Current internal mutable velocity (reused to avoid allocations)
         this._velocity = { x: 0.0, y: 0.0, z: 0.0 };
 
+        // Pre-clamp airborne velocity (preserved when flight ends)
+        this._lastAirVelocity = { x: 0.0, y: 0.0, z: 0.0 };
+
         // Flight timing
         this._elapsed = 0.0;
 
@@ -115,6 +118,11 @@ export class BallTrajectory {
         this._velocity.x = 0.0;
         this._velocity.y = INITIAL_VELOCITY_Y;
         this._velocity.z = 0.0;
+
+        // Initialize pre-clamp air velocity
+        this._lastAirVelocity.x = 0.0;
+        this._lastAirVelocity.y = INITIAL_VELOCITY_Y;
+        this._lastAirVelocity.z = 0.0;
 
         // Reset flight timing and switch to air mode
         this._elapsed = 0.0;
@@ -151,6 +159,11 @@ export class BallTrajectory {
             this._position.y = this._startY;
             this._position.z = this._startZ;
 
+            // Pre-clamp landing velocity evaluated at FLIGHT_DURATION (vy = v0 - g * FLIGHT_DURATION = -INITIAL_VELOCITY_Y)
+            this._lastAirVelocity.x = 0.0;
+            this._lastAirVelocity.y = INITIAL_VELOCITY_Y - GRAVITY * FLIGHT_DURATION;
+            this._lastAirVelocity.z = 0.0;
+
             // At landing, vertical velocity stops and ball is seated
             this._velocity.x = 0.0;
             this._velocity.y = 0.0;
@@ -171,6 +184,11 @@ export class BallTrajectory {
         this._velocity.x = 0.0;
         this._velocity.y = INITIAL_VELOCITY_Y - GRAVITY * t;
         this._velocity.z = 0.0;
+
+        // Update pre-clamp air velocity
+        this._lastAirVelocity.x = 0.0;
+        this._lastAirVelocity.y = this._velocity.y;
+        this._lastAirVelocity.z = 0.0;
     }
 
     /**
@@ -211,9 +229,37 @@ export class BallTrajectory {
                 y: this._velocity.y,
                 z: this._velocity.z,
             },
+            lastAirVelocity: {
+                x: this._lastAirVelocity.x,
+                y: this._lastAirVelocity.y,
+                z: this._lastAirVelocity.z,
+            },
             mode: this._mode,
+            isAirborne: this._mode === BallTrajectoryMode.AIR,
             flightId: this._flightId,
+            elapsed: this._elapsed,
+            flightDuration: FLIGHT_DURATION,
         };
+    }
+
+    /**
+     * Last pre-clamp velocity in air before landing (or current velocity in air).
+     * @returns {{ x: number, y: number, z: number }}
+     */
+    get lastAirVelocity() {
+        return {
+            x: this._lastAirVelocity.x,
+            y: this._lastAirVelocity.y,
+            z: this._lastAirVelocity.z,
+        };
+    }
+
+    /**
+     * Whether the ball is currently in flight.
+     * @returns {boolean}
+     */
+    get isAirborne() {
+        return this._mode === BallTrajectoryMode.AIR;
     }
 
     /**
@@ -236,6 +282,9 @@ export class BallTrajectory {
         this._velocity.x = 0.0;
         this._velocity.y = 0.0;
         this._velocity.z = 0.0;
+        this._lastAirVelocity.x = 0.0;
+        this._lastAirVelocity.y = 0.0;
+        this._lastAirVelocity.z = 0.0;
     }
 
     /**

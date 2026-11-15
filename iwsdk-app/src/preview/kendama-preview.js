@@ -329,5 +329,9 @@ function updateHUDCounts(components) {
 
 // Auto-boot previewer on window load
 if (typeof window !== 'undefined') {
-    window.addEventListener('DOMContentLoaded', initPreviewer);
+    if (document.readyState === 'loading') {
+        window.addEventListener('DOMContentLoaded', initPreviewer);
+    } else {
+        initPreviewer();
+    }
 }

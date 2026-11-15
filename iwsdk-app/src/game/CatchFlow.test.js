@@ -268,4 +268,90 @@ describe('CatchFlow', () => {
         expect(miss2).toEqual({ type: 'MISS', flightId: 9 });
         expect(flow.state).toBe('seated');
     });
+
+    describe('Flight Expiration Miss Handling', () => {
+        it('1. update() produces a MISS when trajectory mode transitions to "seated"', () => {
+            flow.onLaunch(42);
+            expect(flow.state).toBe('air');
+
+            const res = flow.update(0.016, originPose, {
+                position: { x: 0.0, y: 1.25, z: -0.45 },
+                velocity: { x: 0.0, y: 0.0, z: 0.0 },
+                mode: 'seated',
+            });
+
+            expect(res).toEqual({ type: 'MISS', flightId: 42 });
+            expect(flow.state).toBe('seated');
+        });
+
+        it('2. update() produces a MISS when isAirborne is false', () => {
+            flow.onLaunch(43);
+            const res = flow.update(0.016, originPose, {
+                position: { x: 0.0, y: 1.25, z: -0.45 },
+                velocity: { x: 0.0, y: 0.0, z: 0.0 },
+                isAirborne: false,
+            });
+
+            expect(res).toEqual({ type: 'MISS', flightId: 43 });
+            expect(flow.state).toBe('seated');
+        });
+
+        it('3. update() produces a MISS when elapsed >= flightDuration', () => {
+            flow.onLaunch(44);
+            const res = flow.update(0.016, originPose, {
+                position: { x: 0.0, y: 1.25, z: -0.45 },
+                velocity: { x: 0.0, y: 0.0, z: 0.0 },
+                elapsed: 0.8390,
+                flightDuration: 0.8390,
+            });
+
+            expect(res).toEqual({ type: 'MISS', flightId: 44 });
+            expect(flow.state).toBe('seated');
+        });
+
+        it('4. update() defers expiration when deferExpiration: true is specified', () => {
+            flow.onLaunch(45);
+            const res = flow.update(0.016, originPose, {
+                position: { x: 0.0, y: 1.25, z: -0.45 },
+                velocity: { x: 0.0, y: 0.0, z: 0.0 },
+                mode: 'seated',
+                deferExpiration: true,
+            });
+
+            expect(res).toBeNull();
+            expect(flow.state).toBe('air');
+
+            // Then explicit checkFlightExpiration reports the miss
+            const expRes = flow.checkFlightExpiration(originPose, { mode: 'seated' });
+            expect(expRes).toEqual({ type: 'MISS', flightId: 45 });
+            expect(flow.state).toBe('seated');
+        });
+
+        it('5. second update after expiration miss returns null and does not duplicate MISS', () => {
+            flow.onLaunch(46);
+            flow.update(0.016, originPose, { mode: 'seated' });
+            expect(flow.state).toBe('seated');
+
+            const secondRes = flow.update(0.016, originPose, { mode: 'seated' });
+            expect(secondRes).toBeNull();
+        });
+
+        it('6. resetSeatCup re-seats the ball directly onto the specified cup and updates previousSeatCupKey', () => {
+            expect(flow.seatCupKey).toBe(CUP_IDS.SPIKE);
+
+            flow.resetSeatCup(CUP_IDS.BIG_CUP, originPose);
+            expect(flow.seatCupKey).toBe(CUP_IDS.BIG_CUP);
+
+            const expectedSeat = computeCupWorldSeatPoint(CUP_IDS.BIG_CUP, originPose);
+            expect(flow.ballPosition.x).toBeCloseTo(expectedSeat.x, 5);
+            expect(flow.ballPosition.y).toBeCloseTo(expectedSeat.y, 5);
+            expect(flow.ballPosition.z).toBeCloseTo(expectedSeat.z, 5);
+
+            // After launch and miss, it returns to big cup
+            flow.onLaunch(99);
+            flow.reportMiss(originPose);
+            expect(flow.seatCupKey).toBe(CUP_IDS.BIG_CUP);
+            expect(flow.ballPosition.x).toBeCloseTo(expectedSeat.x, 5);
+        });
+    });
 });

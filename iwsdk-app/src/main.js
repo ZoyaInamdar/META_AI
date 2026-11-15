@@ -59,6 +59,7 @@ import {
   getChapterConfig
 } from './mission/missionConfig.js';
 
+import { KendamaXRSystem } from './game/KendamaXRSystem.js';
 import { MissionController } from './mission/MissionController.js';
 import { TrickSequencer } from './mission/TrickSequencer.js';
 import { OrbitalEngine } from './physics/OrbitalEngine.js';
@@ -588,6 +589,13 @@ export function initGame(options = {}) {
   const bus = options.eventBus || defaultEventBus;
   const kenGroup = options.gameplayKenGroup || gameplayKenGroup;
 
+  // Convenience resolution when gameLoop is provided directly
+  if (options.gameLoop) {
+    if (!options.inputSystem) options.inputSystem = options.gameLoop.inputSystem;
+    if (!options.catchDetector) options.catchDetector = options.gameLoop.catchDetector;
+    if (!options.scoreManager) options.scoreManager = options.gameLoop.scoreManager;
+  }
+
   let gameLoop = options.gameLoop || null;
   // If no gameLoop provided and no specific facet mocks provided, create the production GameLoop
   if (!gameLoop && options.useGameLoop !== false && !options.catchDetector && !options.scoreManager && !options.inputSystem) {
@@ -608,18 +616,65 @@ export function initGame(options = {}) {
   // Ensure initial target is emitted immediately after GameLoop is subscribed
   pipeline.emitInitialTarget();
 
+  const world = options.world || null;
+  const configuredHand = options.hand || options.gameLoop?.hand || 'right';
+
   let isRunning = true;
   let rafId = null;
+  let xrSystem = null;
+  let xrCleanup = null;
 
-  function loop(time) {
-    if (!isRunning) return;
-    pipeline.tick(time);
-    if (typeof requestAnimationFrame === 'function') {
-      rafId = requestAnimationFrame(loop);
+  if (world) {
+    // ECS registration architecture: wire through IWSDK World
+    if (typeof world.registerSystem === 'function') {
+      if (!world.hasSystem?.(KendamaXRSystem)) {
+        world.registerSystem(KendamaXRSystem);
+      }
+      xrSystem = typeof world.getSystem === 'function'
+        ? world.getSystem(KendamaXRSystem)
+        : world.getSystems?.().find((s) => s instanceof KendamaXRSystem);
+
+      if (xrSystem) {
+        xrSystem.setPipeline(pipeline);
+        if (typeof xrSystem.setHand === 'function') {
+          xrSystem.setHand(configuredHand);
+        } else {
+          xrSystem.hand = configuredHand;
+        }
+        const loopInstance = options.gameLoop || pipeline.inputSystem?.gameLoop;
+        if (loopInstance) {
+          xrSystem.setGameLoop(loopInstance);
+        }
+      }
+    } else if (typeof world.onXRFrame === 'function') {
+      // Callback architecture fallback when world exposes onXRFrame instead of full ECS
+      xrCleanup = world.onXRFrame((frame, delta, time) => {
+        if (!isRunning) return;
+        const refSpace = world.xrReferenceSpace ?? null;
+        const inputSource = world.input?.xr?.getPrimaryInputSource?.(configuredHand) ?? null;
+        const xrContext = {
+          frame,
+          referenceSpace: refSpace,
+          inputSource,
+          hand: configuredHand,
+          world,
+        };
+        const loopInstance = options.gameLoop || pipeline.inputSystem?.gameLoop;
+        if (loopInstance && typeof loopInstance.setXRContext === 'function') {
+          loopInstance.setXRContext(xrContext);
+        }
+        pipeline.tick(time * 1000, frame, delta);
+      });
     }
-  }
-
-  if (typeof requestAnimationFrame === 'function' && !options.manualTick) {
+  } else if (typeof requestAnimationFrame === 'function' && !options.manualTick) {
+    // Non-XR / Desktop / Headless fallback loop
+    function loop(time) {
+      if (!isRunning) return;
+      pipeline.tick(time);
+      if (typeof requestAnimationFrame === 'function') {
+        rafId = requestAnimationFrame(loop);
+      }
+    }
     rafId = requestAnimationFrame(loop);
   }
 
@@ -628,11 +683,25 @@ export function initGame(options = {}) {
     gameLoop,
     gameplayKenGroup: pipeline.gameplayKenGroup,
     eventBus: bus,
+    xrSystem,
     tick: (time, xrFrame, forcedDt) => pipeline.tick(time, xrFrame, forcedDt),
     stop: () => {
       isRunning = false;
+      if (xrSystem) {
+        if (typeof world?.unregisterSystem === 'function') {
+          world.unregisterSystem(KendamaXRSystem);
+        } else {
+          xrSystem.stop?.();
+          xrSystem.destroy?.();
+        }
+      }
+      if (typeof xrCleanup === 'function') {
+        xrCleanup();
+        xrCleanup = null;
+      }
       if (rafId !== null && typeof cancelAnimationFrame === 'function') {
         cancelAnimationFrame(rafId);
+        rafId = null;
       }
       if (gameLoop && typeof gameLoop.dispose === 'function') {
         gameLoop.dispose();
