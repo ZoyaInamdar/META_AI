@@ -307,4 +307,115 @@ export function createPorcelainDreamsPreviewAsset() {
     return createBigCupPreviewAsset({ preset: 'porcelain-dreams' });
 }
 
+/**
+ * Inspection assembly names present in the showroom preview asset.
+ * @readonly
+ */
+export const PREVIEW_ASSEMBLY_NAMES = Object.freeze([
+    'big-cup-three-quarter',
+    'big-cup-cavity-view',
+    'big-cup-profile-view',
+]);
+
+/**
+ * Authoritative Ken component mesh names present in each Kendama assembly.
+ * @readonly
+ */
+export const KEN_COMPONENT_MESH_NAMES = Object.freeze([
+    'sarado-crossbar',
+    'big-cup-oozara',
+    'small-cup-kozara',
+    'base-cup-chuzara',
+    'spike-kensaki',
+    'handle-ken',
+]);
+
+/**
+ * Applies a Kendama preset's materials in-place to an already-instantiated preview root.
+ *
+ * Updates material references across all three inspection models (center upright with seated Tama,
+ * left top-down cavity view, and right three-quarter profile view) without recreating meshes,
+ * altering geometry, modifying transforms, or rebuilding the assembly hierarchy.
+ *
+ * @param {import('three').Object3D} previewRoot - The existing showroom preview root group.
+ * @param {string | object} presetOrId - Canonical preset ID (e.g. 'galaxy-wood') or preset object.
+ * @returns {object} The resolved preset object that was applied.
+ * @throws {TypeError} If previewRoot is null, undefined, or not a Three.js Object3D.
+ * @throws {Error} If previewRoot is missing required inspection assemblies, component meshes, or materials.
+ */
+export function applyPresetToPreviewRoot(previewRoot, presetOrId) {
+    if (!previewRoot || typeof previewRoot.getObjectByName !== 'function') {
+        throw new TypeError('applyPresetToPreviewRoot: previewRoot must be a valid Three.js Object3D or Group.');
+    }
+
+    // 1. Resolve target preset (supporting preset object or ID string with existing getKendamaPreset fallback)
+    let preset;
+    if (presetOrId && typeof presetOrId === 'object' && presetOrId.kenMaterials && presetOrId.tamaMaterial) {
+        preset = presetOrId;
+    } else {
+        preset = getKendamaPreset(presetOrId);
+    }
+
+    if (!preset || !preset.kenMaterials || !preset.tamaMaterial) {
+        throw new Error(`applyPresetToPreviewRoot: Failed to resolve a valid preset for input: ${presetOrId}`);
+    }
+
+    // 2. Locate all three inspection assemblies
+    const assemblies = [];
+    for (const assemblyName of PREVIEW_ASSEMBLY_NAMES) {
+        const assembly = previewRoot.getObjectByName(assemblyName);
+        if (!assembly) {
+            throw new Error(
+                `applyPresetToPreviewRoot: Expected inspection assembly "${assemblyName}" was not found in previewRoot.`
+            );
+        }
+        assemblies.push(assembly);
+    }
+
+    // 3. Validate all Ken component meshes and materials before mutating any state
+    const plannedUpdates = [];
+    for (const assembly of assemblies) {
+        for (const compName of KEN_COMPONENT_MESH_NAMES) {
+            const mesh = assembly.getObjectByName(compName);
+            if (!mesh || !mesh.isMesh) {
+                throw new Error(
+                    `applyPresetToPreviewRoot: Required Ken component mesh "${compName}" was not found in assembly "${assembly.name}".`
+                );
+            }
+            const mat = preset.kenMaterials[compName];
+            if (!mat) {
+                throw new Error(
+                    `applyPresetToPreviewRoot: Preset "${preset.id}" is missing material for Ken component "${compName}".`
+                );
+            }
+            plannedUpdates.push({ mesh, material: mat });
+        }
+    }
+
+    // 4. Locate and validate the Tama mesh (in centerModel or anywhere in previewRoot)
+    const centerModel = assemblies[0];
+    const tamaMesh = centerModel.getObjectByName('celestial-tama') || previewRoot.getObjectByName('celestial-tama');
+    if (!tamaMesh || !tamaMesh.isMesh) {
+        throw new Error(
+            'applyPresetToPreviewRoot: Required Tama mesh ("celestial-tama") was not found in previewRoot.'
+        );
+    }
+    plannedUpdates.push({ mesh: tamaMesh, material: preset.tamaMaterial });
+
+    // Defensive check: if any other assembly also contains a celestial-tama mesh, update it as well
+    for (let i = 1; i < assemblies.length; i++) {
+        const extraTama = assemblies[i].getObjectByName('celestial-tama');
+        if (extraTama && extraTama.isMesh && !plannedUpdates.some((u) => u.mesh === extraTama)) {
+            plannedUpdates.push({ mesh: extraTama, material: preset.tamaMaterial });
+        }
+    }
+
+    // 5. Atomic application: All validations succeeded; reassign material references in place
+    for (const { mesh, material } of plannedUpdates) {
+        mesh.material = material;
+    }
+
+    return preset;
+}
+
 export default createBigCupPreviewAsset;

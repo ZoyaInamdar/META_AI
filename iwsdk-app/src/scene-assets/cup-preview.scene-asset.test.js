@@ -16,10 +16,13 @@
 
 import { describe, it } from 'vitest';
 import assert from 'node:assert/strict';
-import { Vector3, Mesh } from 'three';
+import { Vector3, Mesh, Group } from 'three';
 import {
     createKendamaAssemblyGroup,
     createBigCupPreviewAsset,
+    applyPresetToPreviewRoot,
+    PREVIEW_ASSEMBLY_NAMES,
+    KEN_COMPONENT_MESH_NAMES,
 } from './cup-preview.scene-asset.js';
 import {
     cupConfigs,
@@ -50,6 +53,16 @@ import {
 import {
     celestialTamaMaterial,
 } from '../render/TamaMaterial.js';
+import {
+    KENDAMA_PRESET_IDS,
+    KENDAMA_PRESETS,
+    getKendamaPreset,
+    CELESTIAL_PRESET,
+    GALAXY_WOOD_PRESET,
+    BUBBLEGUM_POP_PRESET,
+    DARK_MATTER_PRESET,
+    PORCELAIN_DREAMS_PRESET,
+} from '../render/KendamaPresets.js';
 
 describe('Showroom Asset & Assembly Tama Integration (Spike Seating)', () => {
     describe('Showroom Asset Registration & Singleton Tama', () => {
@@ -298,6 +311,262 @@ describe('Showroom Asset & Assembly Tama Integration (Spike Seating)', () => {
             assert.equal(assembly.getObjectByName('base-cup-chuzara').material, roseNebulaMaterial);
             assert.equal(assembly.getObjectByName('spike-kensaki').material, moonPearlMaterial);
             assert.equal(assembly.getObjectByName('handle-ken').material, moonPearlMaterial);
+        });
+    });
+
+    describe('Runtime Kendama Preset Material Switching (applyPresetToPreviewRoot)', () => {
+        const ALL_PRESET_IDS = [
+            KENDAMA_PRESET_IDS.CELESTIAL,
+            KENDAMA_PRESET_IDS.GALAXY_WOOD,
+            KENDAMA_PRESET_IDS.BUBBLEGUM_POP,
+            KENDAMA_PRESET_IDS.DARK_MATTER,
+            KENDAMA_PRESET_IDS.PORCELAIN_DREAMS,
+        ];
+
+        describe('Preset Application Across All Five Presets', () => {
+            for (const presetId of ALL_PRESET_IDS) {
+                it(`applies preset "${presetId}" to an existing preview root by ID`, () => {
+                    // Start with an opposite preset to ensure material references definitely change
+                    const initialPresetId = presetId === KENDAMA_PRESET_IDS.CELESTIAL
+                        ? KENDAMA_PRESET_IDS.GALAXY_WOOD
+                        : KENDAMA_PRESET_IDS.CELESTIAL;
+                    const previewRoot = createBigCupPreviewAsset({ preset: initialPresetId });
+                    const targetPreset = getKendamaPreset(presetId);
+
+                    const appliedPreset = applyPresetToPreviewRoot(previewRoot, presetId);
+
+                    assert.equal(appliedPreset.id, targetPreset.id, 'Must return the resolved target preset');
+
+                    // 1. Verify Center Model (big-cup-three-quarter)
+                    const centerModel = previewRoot.getObjectByName('big-cup-three-quarter');
+                    assert.ok(centerModel, 'Center model must exist');
+                    for (const compName of KEN_COMPONENT_MESH_NAMES) {
+                        const mesh = centerModel.getObjectByName(compName);
+                        assert.ok(mesh instanceof Mesh, `${compName} must be a Mesh in center model`);
+                        assert.equal(
+                            mesh.material,
+                            targetPreset.kenMaterials[compName],
+                            `Center ${compName} material must match preset ${presetId}`
+                        );
+                    }
+                    const centerTama = centerModel.getObjectByName('celestial-tama');
+                    assert.ok(centerTama instanceof Mesh, 'Center model must have a seated Tama mesh');
+                    assert.equal(
+                        centerTama.material,
+                        targetPreset.tamaMaterial,
+                        `Center Tama material must match preset ${presetId}`
+                    );
+
+                    // 2. Verify Left Cavity Model (big-cup-cavity-view)
+                    const leftModel = previewRoot.getObjectByName('big-cup-cavity-view');
+                    assert.ok(leftModel, 'Left model must exist');
+                    for (const compName of KEN_COMPONENT_MESH_NAMES) {
+                        const mesh = leftModel.getObjectByName(compName);
+                        assert.ok(mesh instanceof Mesh, `${compName} must be a Mesh in left model`);
+                        assert.equal(
+                            mesh.material,
+                            targetPreset.kenMaterials[compName],
+                            `Left ${compName} material must match preset ${presetId}`
+                        );
+                    }
+                    assert.equal(leftModel.getObjectByName('celestial-tama'), undefined, 'Left model must not have a Tama');
+
+                    // 3. Verify Right Profile Model (big-cup-profile-view)
+                    const rightModel = previewRoot.getObjectByName('big-cup-profile-view');
+                    assert.ok(rightModel, 'Right model must exist');
+                    for (const compName of KEN_COMPONENT_MESH_NAMES) {
+                        const mesh = rightModel.getObjectByName(compName);
+                        assert.ok(mesh instanceof Mesh, `${compName} must be a Mesh in right model`);
+                        assert.equal(
+                            mesh.material,
+                            targetPreset.kenMaterials[compName],
+                            `Right ${compName} material must match preset ${presetId}`
+                        );
+                    }
+                    assert.equal(rightModel.getObjectByName('celestial-tama'), undefined, 'Right model must not have a Tama');
+                });
+            }
+
+            it('supports passing a valid preset object directly as input', () => {
+                const previewRoot = createBigCupPreviewAsset({ preset: 'celestial' });
+                const applied = applyPresetToPreviewRoot(previewRoot, GALAXY_WOOD_PRESET);
+
+                assert.equal(applied, GALAXY_WOOD_PRESET);
+                const centerModel = previewRoot.getObjectByName('big-cup-three-quarter');
+                assert.equal(
+                    centerModel.getObjectByName('big-cup-oozara').material,
+                    GALAXY_WOOD_PRESET.kenMaterials['big-cup-oozara']
+                );
+                assert.equal(
+                    centerModel.getObjectByName('celestial-tama').material,
+                    GALAXY_WOOD_PRESET.tamaMaterial
+                );
+            });
+        });
+
+        describe('Repeated Sequential In-Place Switching Across All Five Presets', () => {
+            it('switches through all five presets repeatedly without recreating meshes or leaking objects', () => {
+                const previewRoot = createBigCupPreviewAsset({ preset: 'celestial' });
+
+                // Snapshot original mesh objects and their geometries
+                const originalMeshes = [];
+                previewRoot.traverse((child) => {
+                    if (child.isMesh) {
+                        originalMeshes.push({
+                            name: child.name,
+                            mesh: child,
+                            geometry: child.geometry,
+                            parent: child.parent,
+                            posX: child.position.x,
+                            posY: child.position.y,
+                            posZ: child.position.z,
+                            rotX: child.rotation.x,
+                            rotY: child.rotation.y,
+                            rotZ: child.rotation.z,
+                        });
+                    }
+                });
+
+                // Exactly 19 meshes in showroom preview (6 Ken * 3 models + 1 Tama in center model)
+                assert.equal(originalMeshes.length, 19, 'Must have exactly 19 meshes initially');
+
+                const sequence = [
+                    KENDAMA_PRESET_IDS.GALAXY_WOOD,
+                    KENDAMA_PRESET_IDS.BUBBLEGUM_POP,
+                    KENDAMA_PRESET_IDS.DARK_MATTER,
+                    KENDAMA_PRESET_IDS.PORCELAIN_DREAMS,
+                    KENDAMA_PRESET_IDS.CELESTIAL,
+                    KENDAMA_PRESET_IDS.GALAXY_WOOD,
+                    KENDAMA_PRESET_IDS.PORCELAIN_DREAMS,
+                ];
+
+                for (const presetId of sequence) {
+                    const preset = getKendamaPreset(presetId);
+                    const result = applyPresetToPreviewRoot(previewRoot, presetId);
+                    assert.equal(result.id, presetId);
+
+                    // Verify current mesh count is still exactly 19
+                    const currentMeshes = [];
+                    previewRoot.traverse((child) => {
+                        if (child.isMesh) currentMeshes.push(child);
+                    });
+                    assert.equal(currentMeshes.length, 19, `Mesh count must remain 19 after switching to ${presetId}`);
+
+                    // Verify exact mesh and geometry reference equality (zero allocations / zero recreation)
+                    for (let i = 0; i < originalMeshes.length; i++) {
+                        const orig = originalMeshes[i];
+                        const curr = currentMeshes[i];
+
+                        assert.equal(curr, orig.mesh, `Mesh reference for ${orig.name} must remain identical`);
+                        assert.equal(curr.geometry, orig.geometry, `Geometry reference for ${orig.name} must remain identical`);
+                        assert.equal(curr.parent, orig.parent, `Parent for ${orig.name} must remain identical`);
+                        assert.equal(curr.position.x, orig.posX, `Position X for ${orig.name} must remain identical`);
+                        assert.equal(curr.position.y, orig.posY, `Position Y for ${orig.name} must remain identical`);
+                        assert.equal(curr.position.z, orig.posZ, `Position Z for ${orig.name} must remain identical`);
+
+                        // Verify material assignment
+                        if (curr.name === 'celestial-tama') {
+                            assert.equal(curr.material, preset.tamaMaterial, `Tama must have ${presetId} material`);
+                        } else {
+                            assert.equal(curr.material, preset.kenMaterials[curr.name], `${curr.name} must have ${presetId} material`);
+                        }
+                    }
+
+                    // Verify assembly group hierarchy and child counts
+                    assert.equal(previewRoot.children.length, 3, 'Preview root must retain exactly 3 assembly children');
+                    assert.equal(previewRoot.getObjectByName('big-cup-three-quarter').children.length, 7);
+                    assert.equal(previewRoot.getObjectByName('big-cup-cavity-view').children.length, 6);
+                    assert.equal(previewRoot.getObjectByName('big-cup-profile-view').children.length, 6);
+                }
+            });
+        });
+
+        describe('Invalid Input & Atomic Error Handling', () => {
+            it('throws TypeError when previewRoot is null, undefined, or not a Three.js Object3D', () => {
+                assert.throws(
+                    () => applyPresetToPreviewRoot(null, 'galaxy-wood'),
+                    { name: 'TypeError' }
+                );
+                assert.throws(
+                    () => applyPresetToPreviewRoot(undefined, 'galaxy-wood'),
+                    { name: 'TypeError' }
+                );
+                assert.throws(
+                    () => applyPresetToPreviewRoot({}, 'galaxy-wood'),
+                    { name: 'TypeError' }
+                );
+                assert.throws(
+                    () => applyPresetToPreviewRoot('invalid-root', 'galaxy-wood'),
+                    { name: 'TypeError' }
+                );
+            });
+
+            it('falls back to Celestial preset when an unknown preset ID is supplied', () => {
+                const previewRoot = createBigCupPreviewAsset({ preset: 'galaxy-wood' });
+                const result = applyPresetToPreviewRoot(previewRoot, 'non-existent-neon-preset');
+
+                assert.equal(result.id, CELESTIAL_PRESET.id, 'Must fall back to Celestial preset');
+                const centerModel = previewRoot.getObjectByName('big-cup-three-quarter');
+                assert.equal(
+                    centerModel.getObjectByName('big-cup-oozara').material,
+                    CELESTIAL_PRESET.kenMaterials['big-cup-oozara']
+                );
+                assert.equal(
+                    centerModel.getObjectByName('celestial-tama').material,
+                    CELESTIAL_PRESET.tamaMaterial
+                );
+            });
+
+            it('fails atomically without modifying any materials if an expected assembly is missing', () => {
+                const previewRoot = createBigCupPreviewAsset({ preset: 'celestial' });
+                const leftModel = previewRoot.getObjectByName('big-cup-cavity-view');
+                previewRoot.remove(leftModel);
+
+                const centerCrossbar = previewRoot.getObjectByName('big-cup-three-quarter').getObjectByName('sarado-crossbar');
+                const initialMaterial = centerCrossbar.material;
+
+                assert.throws(
+                    () => applyPresetToPreviewRoot(previewRoot, 'galaxy-wood'),
+                    /Expected inspection assembly "big-cup-cavity-view" was not found in previewRoot/
+                );
+
+                // Material must NOT have changed (atomic validation)
+                assert.equal(centerCrossbar.material, initialMaterial, 'Materials must not change when validation fails');
+            });
+
+            it('fails atomically without modifying any materials if a Ken component mesh is missing', () => {
+                const previewRoot = createBigCupPreviewAsset({ preset: 'celestial' });
+                const rightModel = previewRoot.getObjectByName('big-cup-profile-view');
+                const handleMesh = rightModel.getObjectByName('handle-ken');
+                rightModel.remove(handleMesh);
+
+                const centerBigCup = previewRoot.getObjectByName('big-cup-three-quarter').getObjectByName('big-cup-oozara');
+                const initialMaterial = centerBigCup.material;
+
+                assert.throws(
+                    () => applyPresetToPreviewRoot(previewRoot, 'galaxy-wood'),
+                    /Required Ken component mesh "handle-ken" was not found in assembly "big-cup-profile-view"/
+                );
+
+                assert.equal(centerBigCup.material, initialMaterial, 'Materials must not change when validation fails');
+            });
+
+            it('fails atomically without modifying any materials if the Tama mesh is missing', () => {
+                const previewRoot = createBigCupPreviewAsset({ preset: 'celestial' });
+                const centerModel = previewRoot.getObjectByName('big-cup-three-quarter');
+                const tamaMesh = centerModel.getObjectByName('celestial-tama');
+                centerModel.remove(tamaMesh);
+
+                const centerBigCup = centerModel.getObjectByName('big-cup-oozara');
+                const initialMaterial = centerBigCup.material;
+
+                assert.throws(
+                    () => applyPresetToPreviewRoot(previewRoot, 'galaxy-wood'),
+                    /Required Tama mesh \("celestial-tama"\) was not found in previewRoot/
+                );
+
+                assert.equal(centerBigCup.material, initialMaterial, 'Materials must not change when validation fails');
+            });
         });
     });
 });
