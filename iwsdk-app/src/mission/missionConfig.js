@@ -34,6 +34,7 @@ export const MISSION_THRESHOLDS = Object.freeze({
   CHAPTER_1: 400,   // Gravitational Capture (~11-13 catches)
   CHAPTER_2: 1000,  // Binary Resonance (~17-20 catches)
   CHAPTER_3: 1700,  // The Slingshot (~20 catches)
+  CLIMAX: 1700,     // Finale chapter unlock threshold (~20 catches)
   FINALE: 2200      // Calibration Climax & Kintsugi Gold Ignition (~14-16 catches)
 });
 
@@ -111,6 +112,17 @@ export const BINARY_CONFIG = Object.freeze({
   STAR_2_RADIUS: 0.35,
   STAR_1_COLOR: '#FFAAA6', // Pastel Pink / Peach
   STAR_2_COLOR: '#C5A3FF'  // Soft Lavender / Periwinkle
+});
+
+/**
+ * Authoritative Chapter 1 -> Chapter 2 Transition Configuration.
+ * Governs the 2.0s cubic Hermite smoothstep blend into the circumbinary resonance orbit.
+ */
+export const TRANSITION_CONFIG = Object.freeze({
+  DURATION: 2.0,
+  TARGET_POS: Object.freeze({ x: 0.0, y: 2.4, z: 0.0 }),
+  TARGET_VEL: Object.freeze({ x: -0.9128709291752769, y: 0.0, z: 0.0 }),
+  ALIGNMENT_THRESHOLD_DEG: 5.0
 });
 
 /**
