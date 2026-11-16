@@ -30,7 +30,7 @@ import {
   MAX_TWIST_RAD as MAX_ROLL_RAD,
 } from './wristRoll.js';
 
-export const DEFAULT_PITCH_GAIN = 2.0;
+export const DEFAULT_PITCH_GAIN = 3.0;
 export const PITCH_DEADZONE_DEG = 2.0;
 export const MAX_PITCH_DEG = 180.0;
 export const PITCH_DEADZONE_RAD = (PITCH_DEADZONE_DEG * Math.PI) / 180.0;
