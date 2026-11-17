@@ -2044,13 +2044,13 @@ describe('GameLoop (Person A)', () => {
     describe('P. Separate Wrist-Pitch Amplification Integration (Base Cup Only)', () => {
       it('GameLoop constructor initializes pitchGain and currentEffectivePitchGain', () => {
         const defaultLoop = new GameLoop({ gameplayKenGroup: kenGroup });
-        expect(defaultLoop.pitchGain).toBe(2.0);
+        expect(defaultLoop.pitchGain).toBe(3.0);
         // Default target is 'big' (non-base), so effective gain starts at 1.0
         expect(defaultLoop.currentEffectivePitchGain).toBe(1.0);
 
         const baseLoop = new GameLoop({ gameplayKenGroup: kenGroup, target: 'base' });
         expect(baseLoop.activeTargetCup).toBe('base');
-        expect(baseLoop.currentEffectivePitchGain).toBe(2.0);
+        expect(baseLoop.currentEffectivePitchGain).toBe(3.0);
 
         const customLoop = new GameLoop({ gameplayKenGroup: kenGroup, pitchGain: 2.5, target: 'base' });
         expect(customLoop.pitchGain).toBe(2.5);
