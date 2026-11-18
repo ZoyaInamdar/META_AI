@@ -29,6 +29,14 @@ export class KendamaXRSystem extends createSystem({}) {
     this.pipeline = null;
     this.hand = 'right';
     this.updateCount = 0;
+    this._xrContext = {
+      frame: null,
+      referenceSpace: null,
+      inputSource: null,
+      otherInputSource: null,
+      hand: this.hand,
+      world: this.world,
+    };
   }
 
   init() {
@@ -37,6 +45,7 @@ export class KendamaXRSystem extends createSystem({}) {
 
   setHand(hand) {
     this.hand = hand || 'right';
+    this._xrContext.hand = this.hand;
     const loop = this.gameLoop || this.pipeline?.inputSystem?.gameLoop;
     if (loop && typeof loop.setXRContext === 'function') {
       loop.setXRContext({ hand: this.hand });
@@ -73,14 +82,14 @@ export class KendamaXRSystem extends createSystem({}) {
       ?? this.input?.xr?.getPrimaryInputSource?.(otherHand)
       ?? null;
 
-    const xrContext = {
-      frame: xrFrame,
-      referenceSpace: refSpace,
-      inputSource,
-      otherInputSource,
-      hand: this.hand,
-      world: this.world,
-    };
+    this._xrContext.frame = xrFrame;
+    this._xrContext.referenceSpace = refSpace;
+    this._xrContext.inputSource = inputSource;
+    this._xrContext.otherInputSource = otherInputSource;
+    this._xrContext.hand = this.hand;
+    this._xrContext.world = this.world;
+
+    const xrContext = this._xrContext;
 
     // Ensure the latest context reaches GameLoop before input processing
     const loop = this.gameLoop || this.pipeline?.inputSystem?.gameLoop;

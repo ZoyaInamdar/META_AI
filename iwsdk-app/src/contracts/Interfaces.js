@@ -35,6 +35,15 @@ export const Events = Object.freeze({
   PLANET: 'planet',   // Emitted by Person B on planetary evolution state change
   BURN_START: 'burn_start', // Emitted by Person B on capture burn initiation
   BURN_END: 'burn_end',     // Emitted by Person B on capture burn completion
+  EVOLUTION_PROGRESS: 'planet:evolution-progress', // Emitted on planet evolution progression update
+  STAGE_READY: 'planet:stage-ready',               // Emitted when stage evolution reaches 100% (ready to transform)
+  STAGE_COMPLETED: 'planet:stage-completed',       // Emitted when stage transformation commits
+  TRANSFORMATION_STARTED: 'planet:transformation-started',   // Emitted when cinematic transformation begins
+  TRANSFORMATION_PHASE: 'planet:transformation-phase',       // Emitted when cinematic phase transitions
+  TRANSFORMATION_COMPLETED: 'planet:transformation-completed', // Emitted when cinematic transformation completes
+  ORRERY_CHAPTER_CHANGED: 'orrery:chapter-changed',           // Emitted on cosmic narrative chapter advancement
+  ORRERY_ALIGNMENT_COMPLETED: 'orrery:alignment-completed',   // Emitted when Chapter 1 Three-Body syzygy alignment cinematic completes
+  ORRERY_RESONANCE_COMPLETED: 'orrery:resonance-completed',   // Emitted when Chapter 2 Binary Resonance locks and milestone finishes
   FINALE_TRIGGER: 'finale_trigger', // Emitted by Person B on Chapter 4 climax gold ignition
   AUDIO_TRIGGER: 'audio_trigger'    // Emitted by Person B for one-shot audio cues
 });
