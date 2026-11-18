@@ -26,6 +26,7 @@ import {
   Events,
   CupKey,
   CatchType,
+  BallMode,
   BallState,
   CatchResult,
   ScoreEvent,
@@ -75,7 +76,7 @@ export class GameLoop {
       catchFlow = null,
       detector = null,
       scoreManager = null,
-      initialCup = CupKey.SPIKE,
+      initialCup = undefined,
       targetCadenceSeconds = 1.75,
       detectorOptions = {},
     } = options;
@@ -84,16 +85,29 @@ export class GameLoop {
     this.gameplayKenGroup = gameplayKenGroup;
     this.inputSource = inputSource;
     this.inputSourceType = inputSourceType;
+    this.audioSystem = options.audioSystem || null;
 
     // Pose filter for smoothing noisy hardware hand tracking (bypassed for FakeInput)
     this.poseFilter = poseFilter !== undefined
       ? poseFilter
       : new PoseFilter(filterOptions);
 
+    this.targetOverride = options.targetOverride || options.target || null;
+
+    // Resolve initial seated cup:
+    // 1. Explicitly configured options.initialCup if provided.
+    // 2. Otherwise targetOverride / options.target if provided.
+    // 3. Otherwise default unconfigured starting cup CupKey.SPIKE (transitions to mission target on boot).
+    const resolvedInitialCup = (options.initialCup !== undefined)
+      ? options.initialCup
+      : (this.targetOverride || CupKey.SPIKE);
+
+    this.activeTargetCup = this.targetOverride || resolvedInitialCup;
+
     // Component instances
     this.trajectory = trajectory || new BallTrajectory();
     this.catchFlow = catchFlow || new CatchFlow({
-      initialCup,
+      initialCup: resolvedInitialCup,
       kenPose: this.gameplayKenGroup,
     });
 
@@ -107,9 +121,6 @@ export class GameLoop {
     this.scoreEngine = scoreManager || new ScoreManager({
       targetCadenceSeconds,
     });
-
-    this.targetOverride = options.targetOverride || options.target || null;
-    this.activeTargetCup = this.targetOverride || initialCup;
     this._isTrackingValid = true;
     this.lastEvaluatedVelocity = null;
     this.lastEvaluatedBallPosition = null;
@@ -149,6 +160,19 @@ export class GameLoop {
     // Staging queues across intra-frame stages (Stage 2 -> Stage 3)
     this._pendingCatchResult = null;
     this._pendingMissFlightId = null;
+    this._pendingAssistedCandidate = null;
+
+    // Pre-allocated BallState to eliminate per-frame GC churn
+    this._ballState = new BallState(
+      { x: 0, y: 0, z: 0 },
+      { x: 0, y: 0, z: 0 },
+      this.catchFlow ? this.catchFlow.state : BallMode.SEATED
+    );
+
+    // Pre-allocated structures for zero-allocation candidate cup resolution
+    this._canonicalCups = Object.freeze([CupKey.BIG, CupKey.SMALL, CupKey.BASE, CupKey.SPIKE]);
+    this._tempCandidatePos = { x: 0.0, y: 0.0, z: 0.0 };
+    this._tempCandidateNormal = { x: 0.0, y: 0.0, z: 0.0 };
 
     // Subscriptions to Person B events
     this._unsubTarget = this.eventBus.on(Events.TARGET, (target) => {
@@ -157,6 +181,10 @@ export class GameLoop {
       }
       if (target && target.cupKey) {
         this.activeTargetCup = target.cupKey;
+        // Align seated cup with initial mission target before any flight has launched
+        if (this.catchFlow && this.catchFlow.state === 'seated' && !this.trajectory?.flightId) {
+          this.catchFlow.resetSeatCup(this.activeTargetCup, this.gameplayKenGroup);
+        }
       }
     });
 
@@ -412,6 +440,72 @@ export class GameLoop {
   }
 
   /**
+   * Resolves the best candidate cup to evaluate on this frame.
+   * If an active target override is configured (debug mode), that cup is always used.
+   * If a cup candidate is already undergoing multi-frame confirmation hysteresis,
+   * it is preserved to avoid resetting the temporal confirmation count.
+   * Otherwise, all canonical cups are tested against ball position and orientation thresholds,
+   * prioritizing the activeTargetCup when plausible, or the closest physically valid cup.
+   *
+   * @param {{ x: number, y: number, z: number }} ballPos
+   * @param {{ x: number, y: number, z: number }} _ballVel
+   * @param {any} [activeKen]
+   * @returns {string} Target cup key (e.g. 'big', 'small', 'base', 'spike')
+   */
+  _resolveCandidateCup(ballPos, _ballVel, activeKen) {
+    if (this.targetOverride) {
+      return this.targetOverride;
+    }
+
+    if (!this.detector || typeof this.detector.getWorldCupTransform !== 'function') {
+      return this.activeTargetCup || CupKey.BIG;
+    }
+
+    // 1. If candidate is already in confirmation hysteresis, stick with it to complete confirmation
+    const activeCandidate = this.detector.candidateCup;
+    if (activeCandidate) {
+      return activeCandidate;
+    }
+
+    // 2. Prioritize activeTargetCup if ball is within its assisted radius and orientation is valid
+    const targetCup = this.activeTargetCup || CupKey.BIG;
+    const cups = [targetCup, ...this._canonicalCups.filter((c) => c !== targetCup)];
+
+    let bestCup = targetCup;
+    let minDistance = Infinity;
+
+    for (const cup of cups) {
+      const transform = this.detector.getWorldCupTransform(cup, this._tempCandidatePos, this._tempCandidateNormal);
+      if (!transform) continue;
+
+      const radii = this.detector.catchRadii?.[cup];
+      const assistedRadius = radii?.assisted ?? 0.08;
+      const dx = ballPos.x - transform.position.x;
+      const dy = ballPos.y - transform.position.y;
+      const dz = ballPos.z - transform.position.z;
+      const dist = Math.hypot(dx, dy, dz);
+
+      // Check cup opening orientation relative to world UP (0, 1, 0)
+      const dotUp = transform.normal.y;
+      const orientationThresh = this.detector.orientationThresholds?.[cup];
+      const maxAngleDeg = orientationThresh?.maxAngleDeg ?? 40.0;
+      const angleDeg = Math.acos(Math.max(-1.0, Math.min(1.0, dotUp))) * (180.0 / Math.PI);
+
+      if (dist <= assistedRadius && angleDeg <= maxAngleDeg) {
+        if (cup === targetCup) {
+          return cup;
+        }
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestCup = cup;
+        }
+      }
+    }
+
+    return bestCup;
+  }
+
+  /**
    * Stage 2: Advances ballistic trajectory, updates CatchFlow, and evaluates catches.
    *
    * @param {number} dt - Frame delta time in seconds
@@ -439,50 +533,99 @@ export class GameLoop {
     const flowResult = this.catchFlow.update(dt, activeKen, {
       ...trajState,
       deferExpiration: true,
+      targetCupKey: this.activeTargetCup,
     });
 
     // 3. Catch candidate evaluation while in air mode
-    if (this.catchFlow.state === 'air' && this._isTrackingValid) {
-      const ballPos = this.catchFlow.ballPosition;
-      const rawVel = trajState?.velocity ?? this.trajectory?.state?.velocity ?? { x: 0, y: 0, z: 0 };
-      const lastAir = trajState?.lastAirVelocity ?? this.trajectory?.state?.lastAirVelocity ?? this.trajectory?.lastAirVelocity;
-      const isLandingTick = (!trajState?.isAirborne || trajState?.mode === 'seated');
-      const ballVel = (isLandingTick && lastAir) ? lastAir : rawVel;
-      const nowSec = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    const nowSec = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    const isLandingTick = (!trajState?.isAirborne || trajState?.mode === 'seated' || (trajState?.flightDuration && trajState?.elapsed >= trajState?.flightDuration));
 
-      this.lastEvaluatedVelocity = ballVel ? { ...ballVel } : { x: 0, y: 0, z: 0 };
-      this.lastEvaluatedBallPosition = ballPos ? { ...ballPos } : { x: 0, y: 0, z: 0 };
+    // Clear candidate if flight ID changed
+    if (this._pendingAssistedCandidate && this._pendingAssistedCandidate.flightId !== this.trajectory.flightId) {
+      this._pendingAssistedCandidate = null;
+    }
 
-      const evalRes = this.detector.evaluateCatch(
-        ballPos,
-        ballVel,
-        this.activeTargetCup,
-        nowSec,
-        dt
-      );
-      this.lastCatchEvaluation = evalRes;
-      this.lastTickEvaluatedCatch = true;
+    if (this.catchFlow.state === 'air') {
+      if (this._isTrackingValid) {
+        const ballPos = this.catchFlow.ballPosition;
+        const rawVel = trajState?.velocity ?? this.trajectory?.state?.velocity ?? { x: 0, y: 0, z: 0 };
+        const lastAir = trajState?.lastAirVelocity ?? this.trajectory?.state?.lastAirVelocity ?? this.trajectory?.lastAirVelocity;
+        const ballVel = (isLandingTick && lastAir) ? lastAir : rawVel;
 
-      // Process catch only when BOTH evalRes.confirmed and evalRes.valid are true
-      if (evalRes && evalRes.confirmed && evalRes.valid) {
-        this.catchFlow.onCatchConfirmed(evalRes.cupKey, ballPos);
+        this.lastEvaluatedVelocity = ballVel ? { ...ballVel } : { x: 0, y: 0, z: 0 };
+        this.lastEvaluatedBallPosition = ballPos ? { ...ballPos } : { x: 0, y: 0, z: 0 };
 
-        const catchResult = new CatchResult({
-          type: evalRes.catchType === 'clean' ? CatchType.CLEAN : CatchType.ASSISTED,
-          cupKey: evalRes.cupKey,
-          distance: evalRes.details?.distance ?? 0,
-          relativeSpeed: evalRes.details?.relativeSpeed ?? 0,
-          alignmentDot: evalRes.details?.approachDot ?? 0,
-          timestamp: nowSec * 1000,
-        });
+        const candidateCup = this._resolveCandidateCup(ballPos, ballVel, activeKen);
 
-        this._pendingCatchResult = {
-          catchResult,
-          flightId: this.trajectory.flightId,
-          timestampMs: nowSec * 1000,
-        };
+        const evalRes = this.detector.evaluateCatch(
+          ballPos,
+          ballVel,
+          candidateCup,
+          nowSec,
+          dt
+        );
+        this.lastCatchEvaluation = evalRes;
+        this.lastTickEvaluatedCatch = true;
 
-        this.eventBus.emit(Events.CATCH, catchResult);
+        if (this._pendingAssistedCandidate) {
+          const cand = this._pendingAssistedCandidate;
+
+          // Priority 1: Upgrade to CLEAN immediately if any subsequent frame is valid and clean
+          if (evalRes && evalRes.valid && evalRes.catchType === 'clean') {
+            this._finalizeCatch('clean', evalRes.cupKey, ballPos, evalRes.details, nowSec);
+          } else {
+            // Priority 2: Update closest approach & track divergence
+            const curDist = evalRes?.details?.distance;
+            const DIVERGENCE_THRESHOLD = 0.005; // 5mm threshold to filter out hand jitter
+
+            if (typeof curDist === 'number' && Number.isFinite(curDist)) {
+              if (curDist < cand.minDistance) {
+                cand.minDistance = curDist;
+                cand.divergingCount = 0;
+                if (evalRes.valid) {
+                  cand.details = evalRes.details;
+                  cand.ballPos = { ...ballPos };
+                }
+              } else if (curDist > cand.minDistance + DIVERGENCE_THRESHOLD) {
+                cand.divergingCount++;
+              } else {
+                cand.divergingCount = 0;
+              }
+            }
+
+            // Finalize as assisted when landing state reached or distance reliably diverges
+            if (isLandingTick || cand.divergingCount >= 2) {
+              this._finalizeCatch('assisted', cand.cupKey, cand.ballPos, cand.details, nowSec);
+            }
+          }
+        } else {
+          // Process initial catch confirmation
+          if (evalRes && evalRes.confirmed && evalRes.valid) {
+            if (evalRes.catchType === 'clean') {
+              this._finalizeCatch('clean', evalRes.cupKey, ballPos, evalRes.details, nowSec);
+            } else if (evalRes.catchType === 'assisted') {
+              if (isLandingTick) {
+                this._finalizeCatch('assisted', evalRes.cupKey, ballPos, evalRes.details, nowSec);
+              } else {
+                this._pendingAssistedCandidate = {
+                  cupKey: evalRes.cupKey,
+                  ballPos: { ...ballPos },
+                  minDistance: evalRes.details?.distance ?? Infinity,
+                  details: evalRes.details,
+                  divergingCount: 0,
+                  flightId: this.trajectory.flightId,
+                };
+              }
+            }
+          }
+        }
+      } else {
+        // Tracking temporarily lost: preserve pending candidate.
+        // If trajectory lands while untracked, finalize as assisted rather than falsely expiring as miss.
+        if (this._pendingAssistedCandidate && isLandingTick) {
+          const cand = this._pendingAssistedCandidate;
+          this._finalizeCatch('assisted', cand.cupKey, cand.ballPos, cand.details, nowSec);
+        }
       }
     }
 
@@ -490,25 +633,67 @@ export class GameLoop {
     // (a) Depth-based miss detected by CatchFlow
     if (flowResult && flowResult.type === 'MISS') {
       this._pendingMissFlightId = flowResult.flightId;
+      this._pendingAssistedCandidate = null;
     } else if (this.catchFlow.state === 'air') {
-      // (b) Flight expiration miss: if still in 'air' (no catch confirmed) and trajectory ended
-      const expirationMiss = typeof this.catchFlow.checkFlightExpiration === 'function'
-        ? this.catchFlow.checkFlightExpiration(activeKen, {
-            ...trajState,
-            mode: trajState?.mode ?? this.trajectory?.mode,
-            isAirborne: trajState?.isAirborne ?? this.trajectory?.isAirborne,
-            elapsed: trajState?.elapsed ?? this.trajectory?.elapsed,
-            flightDuration: trajState?.flightDuration ?? this.trajectory?.flightDuration,
-          })
-        : null;
+      // (b) Flight expiration miss: if still in 'air' and trajectory ended
+      if (this._pendingAssistedCandidate) {
+        if (isLandingTick) {
+          const cand = this._pendingAssistedCandidate;
+          this._finalizeCatch('assisted', cand.cupKey, cand.ballPos, cand.details, nowSec);
+        }
+      } else {
+        const expirationMiss = typeof this.catchFlow.checkFlightExpiration === 'function'
+          ? this.catchFlow.checkFlightExpiration(activeKen, {
+              ...trajState,
+              mode: trajState?.mode ?? this.trajectory?.mode,
+              isAirborne: trajState?.isAirborne ?? this.trajectory?.isAirborne,
+              elapsed: trajState?.elapsed ?? this.trajectory?.elapsed,
+              flightDuration: trajState?.flightDuration ?? this.trajectory?.flightDuration,
+              targetCupKey: this.activeTargetCup,
+            })
+          : null;
 
-      if (expirationMiss && expirationMiss.type === 'MISS') {
-        this._pendingMissFlightId = expirationMiss.flightId;
+        if (expirationMiss && expirationMiss.type === 'MISS') {
+          this._pendingMissFlightId = expirationMiss.flightId;
+        }
       }
     }
 
     // 5. Emit BALL state every frame
     this.eventBus.emit(Events.BALL, this.getBallState());
+  }
+
+  /**
+   * Finalizes catch confirmation and stages catch score and event.
+   *
+   * @private
+   * @param {'clean' | 'assisted'} catchType
+   * @param {string} cupKey
+   * @param {{ x: number, y: number, z: number }} ballPos
+   * @param {any} details
+   * @param {number} nowSec
+   */
+  _finalizeCatch(catchType, cupKey, ballPos, details, nowSec) {
+    this._pendingAssistedCandidate = null;
+
+    this.catchFlow.onCatchConfirmed(cupKey, ballPos);
+
+    const catchResult = new CatchResult({
+      type: catchType === 'clean' ? CatchType.CLEAN : CatchType.ASSISTED,
+      cupKey,
+      distance: details?.distance ?? 0,
+      relativeSpeed: details?.relativeSpeed ?? 0,
+      alignmentDot: details?.approachDot ?? 0,
+      timestamp: nowSec * 1000,
+    });
+
+    this._pendingCatchResult = {
+      catchResult,
+      flightId: this.trajectory.flightId,
+      timestampMs: nowSec * 1000,
+    };
+
+    this.eventBus.emit(Events.CATCH, catchResult);
   }
 
   /**
@@ -546,10 +731,27 @@ export class GameLoop {
     if (this._pendingMissFlightId !== null) {
       const flightId = this._pendingMissFlightId;
       this._pendingMissFlightId = null;
+      this._pendingAssistedCandidate = null;
+
+      // Ensure ball is reseated consistently with intended target after a miss
+      if (this.catchFlow && this.catchFlow.state === 'seated' && this.activeTargetCup) {
+        if (this.catchFlow.seatCupKey !== this.activeTargetCup) {
+          this.catchFlow.resetSeatCup(this.activeTargetCup, this.gameplayKenGroup);
+        }
+      }
 
       this.scoreEngine.registerMiss();
       this.eventBus.emit(Events.MISS, { flightId, timestamp: nowMs });
     }
+  }
+
+  /**
+   * Sets or updates the active AudioSystem.
+   *
+   * @param {Object} audioSystem
+   */
+  setAudioSystem(audioSystem) {
+    this.audioSystem = audioSystem;
   }
 
   /**
@@ -563,17 +765,26 @@ export class GameLoop {
       return false;
     }
 
+    if (this.audioSystem && typeof this.audioSystem.unlock === 'function') {
+      this.audioSystem.unlock();
+    } else if (typeof window !== 'undefined' && window.__AUDIO_SYSTEM__ && typeof window.__AUDIO_SYSTEM__.unlock === 'function') {
+      window.__AUDIO_SYSTEM__.unlock();
+    }
+
+    this._pendingAssistedCandidate = null;
+
     const launchPos = this.catchFlow.ballPosition;
     this.trajectory.launch(launchPos);
     this.catchFlow.onLaunch(this.trajectory.flightId);
     this.lastTickEvaluatedCatch = false;
+    const trajVel = this.trajectory?.velocity || this.trajectory?.state?.velocity;
     this.lastLaunchInfo = {
       source,
       position: { x: launchPos.x, y: launchPos.y, z: launchPos.z },
       velocity: {
-        x: this.trajectory.state.velocity.x,
-        y: this.trajectory.state.velocity.y,
-        z: this.trajectory.state.velocity.z,
+        x: trajVel ? trajVel.x : 0,
+        y: trajVel ? trajVel.y : 0,
+        z: trajVel ? trajVel.z : 0,
       },
       flightId: this.trajectory.flightId,
       timestamp: typeof performance !== 'undefined' ? performance.now() : Date.now(),
@@ -582,18 +793,38 @@ export class GameLoop {
   }
 
   /**
-   * Retrieves current canonical BallState.
+   * Retrieves current canonical BallState without per-frame allocations.
+   * Mutates and returns a persistent BallState instance to eliminate GC pressure.
    *
    * @returns {BallState}
    */
   getBallState() {
-    const pos = this.catchFlow.ballPosition;
-    const vel = this.trajectory.state.velocity;
-    return new BallState(
-      { x: pos.x, y: pos.y, z: pos.z },
-      { x: vel.x, y: vel.y, z: vel.z },
-      this.catchFlow.state
-    );
+    const pos = this.catchFlow?.ballPosition;
+    const vel = this.trajectory?.velocity || this.trajectory?.state?.velocity;
+    const mode = this.catchFlow?.state || BallMode.SEATED;
+
+    if (!this._ballState) {
+      this._ballState = new BallState(
+        { x: pos ? pos.x : 0, y: pos ? pos.y : 0, z: pos ? pos.z : 0 },
+        { x: vel ? vel.x : 0, y: vel ? vel.y : 0, z: vel ? vel.z : 0 },
+        mode
+      );
+      return this._ballState;
+    }
+
+    if (pos) {
+      this._ballState.position.x = pos.x;
+      this._ballState.position.y = pos.y;
+      this._ballState.position.z = pos.z;
+    }
+    if (vel) {
+      this._ballState.velocity.x = vel.x;
+      this._ballState.velocity.y = vel.y;
+      this._ballState.velocity.z = vel.z;
+    }
+    this._ballState.mode = mode;
+
+    return this._ballState;
   }
 
   /**
@@ -602,6 +833,14 @@ export class GameLoop {
    */
   get isTrackingValid() {
     return this._isTrackingValid;
+  }
+
+  /**
+   * Currently staged assisted catch candidate awaiting potential upgrade to clean, if any.
+   * @returns {Object|null}
+   */
+  get pendingAssistedCandidate() {
+    return this._pendingAssistedCandidate;
   }
 
   /**
@@ -631,6 +870,9 @@ export class GameLoop {
    * Cleans up event listeners registered on the shared EventBus and context references.
    */
   dispose() {
+    this._pendingAssistedCandidate = null;
+    this._pendingCatchResult = null;
+    this._pendingMissFlightId = null;
     if (typeof this._unsubTarget === 'function') {
       this._unsubTarget();
       this._unsubTarget = null;

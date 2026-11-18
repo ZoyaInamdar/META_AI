@@ -67,6 +67,12 @@ import { BinarySystem } from './physics/BinarySystem.js';
 import { CaptureBurn } from './physics/CaptureBurn.js';
 import { FinaleManager } from './physics/FinaleManager.js';
 import { GameLoop } from './game/GameLoop.js';
+import { Vector3, Group } from 'three';
+import { createKendamaAssemblyGroup } from './scene-assets/cup-preview.scene-asset.js';
+
+// Pre-allocated static vectors to guarantee zero per-frame heap allocations
+const _tempBallPos = new Vector3();
+const _defaultSpikeSeatedPos = new Vector3(0.0, 0.078, 0.0);
 
 // Safe dynamic Three.js loading supporting both browser/bundler and Node headless test runtimes
 let THREE = globalThis.THREE;
@@ -88,33 +94,165 @@ if (!THREE) {
  */
 export class MockGroup {
   constructor() {
+    this.children = [];
+    this.userData = {};
     this.position = {
       x: 0, y: 0, z: 0,
       set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; },
-      copy(p) { this.x = p.x ?? 0; this.y = p.y ?? 0; this.z = p.z ?? 0; return this; }
+      copy(p) { this.x = p.x ?? 0; this.y = p.y ?? 0; this.z = p.z ?? 0; return this; },
+      clone() { return { x: this.x, y: this.y, z: this.z }; }
     };
     this.quaternion = {
       x: 0, y: 0, z: 0, w: 1,
       set(x, y, z, w) { this.x = x; this.y = y; this.z = z; this.w = w; return this; },
-      copy(q) { this.x = q.x ?? 0; this.y = q.y ?? 0; this.z = q.z ?? 0; this.w = q.w ?? 1; return this; }
+      copy(q) { this.x = q.x ?? 0; this.y = q.y ?? 0; this.z = q.z ?? 0; this.w = q.w ?? 1; return this; },
+      clone() { return { x: this.x, y: this.y, z: this.z, w: this.w }; }
     };
     this.matrixWorld = { elements: new Float32Array(16) };
   }
 
-  updateMatrixWorld(_force = true) {
+  add(...objects) {
+    this.children.push(...objects);
+    for (const obj of objects) {
+      if (obj) obj.parent = this;
+    }
     return this;
+  }
+
+  getObjectByName(name) {
+    for (const child of this.children) {
+      if (child.name === name) return child;
+      if (typeof child.getObjectByName === 'function') {
+        const found = child.getObjectByName(name);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  }
+
+  updateMatrixWorld(_force = true) {
+    if (this.position && this.matrixWorld?.elements) {
+      this.matrixWorld.elements[12] = this.position.x ?? 0;
+      this.matrixWorld.elements[13] = this.position.y ?? 0;
+      this.matrixWorld.elements[14] = this.position.z ?? 0;
+    }
+    return this;
+  }
+
+  worldToLocal(v) {
+    if (v && this.position) {
+      v.x -= this.position.x;
+      v.y -= this.position.y;
+      v.z -= this.position.z;
+    }
+    return v;
   }
 }
 
 /**
- * Creates a canonical gameplayKenGroup instance.
+ * Attaches the complete procedural Kendama assembly (with seated Tama) to gameplayKenGroup.
+ * Reuses the existing canonical procedural assembly from cup-preview.scene-asset.js.
+ * Idempotent: returns existing assembly if already attached.
+ *
+ * @param {any} kenGroup - Target gameplayKenGroup
+ * @param {Object} [options={}] - Optional assembly options
+ * @returns {any} The attached kendama assembly root
+ */
+export function attachKendamaAssembly(kenGroup, options = {}) {
+  if (!kenGroup || typeof kenGroup.add !== 'function') return null;
+
+  // Idempotent guard: check if assembly is already attached
+  if (typeof kenGroup.getObjectByName === 'function') {
+    const existing = kenGroup.getObjectByName('kendama-assembly-root');
+    if (existing) return existing;
+  }
+
+  try {
+    const assembly = createKendamaAssemblyGroup(options.materials, {
+      includeTama: options.includeTama !== false,
+      preset: options.preset || null
+    });
+    kenGroup.add(assembly);
+
+    const tamaMesh = assembly.getObjectByName('celestial-tama');
+    if (tamaMesh) {
+      kenGroup.userData = kenGroup.userData || {};
+      kenGroup.userData.tamaMesh = tamaMesh;
+      kenGroup.userData.seatedTamaPosition = tamaMesh.position.clone();
+    }
+    return assembly;
+  } catch (err) {
+    console.warn('[main.js] attachKendamaAssembly warning:', err?.message || err);
+    return null;
+  }
+}
+
+/**
+ * Updates the celestial Tama mesh position based on the current BallState without per-frame allocations.
+ * In 'air' or 'catching' mode, follows world-space BallState.position via local coordinate transformation.
+ * In 'seated' mode, remains rigidly seated on the Ken.
+ *
+ * @param {any} kenGroup - Canonical gameplayKenGroup
+ * @param {BallState} ballState - Current canonical BallState
+ * @param {string} [seatCupKey='spike'] - Optional seated cup override
+ */
+export function updateGameplayTamaMesh(kenGroup, ballState, seatCupKey = 'spike') {
+  if (!kenGroup || !ballState) return;
+
+  const tamaMesh = kenGroup.userData?.tamaMesh ||
+    (typeof kenGroup.getObjectByName === 'function' ? kenGroup.getObjectByName('celestial-tama') : null);
+
+  if (!tamaMesh) return;
+
+  const mode = ballState.mode || 'seated';
+
+  if (mode === 'air' || mode === 'catching') {
+    const pos = ballState.position;
+    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y) && Number.isFinite(pos.z)) {
+      _tempBallPos.set(pos.x, pos.y, pos.z);
+      if (tamaMesh.parent && typeof tamaMesh.parent.worldToLocal === 'function') {
+        tamaMesh.parent.worldToLocal(_tempBallPos);
+        tamaMesh.position.copy(_tempBallPos);
+      } else if (typeof kenGroup.worldToLocal === 'function') {
+        kenGroup.worldToLocal(_tempBallPos);
+        tamaMesh.position.copy(_tempBallPos);
+      } else {
+        tamaMesh.position.set(pos.x, pos.y, pos.z);
+      }
+    }
+  } else {
+    // 'seated' mode: remain seated on the Ken
+    const seatedPos = kenGroup.userData?.seatedTamaPosition || _defaultSpikeSeatedPos;
+    if (tamaMesh.position && typeof tamaMesh.position.copy === 'function') {
+      tamaMesh.position.copy(seatedPos);
+    } else if (tamaMesh.position) {
+      tamaMesh.position.x = seatedPos.x;
+      tamaMesh.position.y = seatedPos.y;
+      tamaMesh.position.z = seatedPos.z;
+    }
+    if (tamaMesh.quaternion && typeof tamaMesh.quaternion.set === 'function') {
+      tamaMesh.quaternion.set(0, 0, 0, 1);
+    }
+  }
+}
+
+/**
+ * Creates a canonical gameplayKenGroup instance with attached procedural Kendama assembly.
+ * @param {Object} [options={}]
  * @returns {any} THREE.Group or MockGroup
  */
-export function createGameplayKenGroup() {
+export function createGameplayKenGroup(options = {}) {
+  let group;
   if (THREE && typeof THREE.Group === 'function') {
-    return new THREE.Group();
+    group = new THREE.Group();
+  } else if (Group) {
+    group = new Group();
+  } else {
+    group = new MockGroup();
   }
-  return new MockGroup();
+  group.name = 'gameplay-ken-group';
+  attachKendamaAssembly(group, options);
+  return group;
 }
 
 /**
@@ -266,14 +404,30 @@ export class DefaultOrbitalEngine {
  * Default stub for Person C's World Renderer.
  */
 export class DefaultWorldRenderer {
-  constructor() {
+  constructor(options = {}) {
     this.renderedFrameCount = 0;
     this.lastSnapshot = null;
+    this.planetoidRenderer = options.planetoidRenderer || null;
+  }
+
+  setPlanetoidRenderer(renderer) {
+    this.planetoidRenderer = renderer;
   }
 
   render(snapshot) {
     this.lastSnapshot = snapshot;
     this.renderedFrameCount++;
+    if (this.planetoidRenderer && snapshot) {
+      this.planetoidRenderer.update({
+        ballState: snapshot.ballState,
+        planetState: snapshot.planetState,
+        deltaTime: snapshot.dtClamped,
+        elapsedTime: snapshot.timestamp ? snapshot.timestamp / 1000 : null
+      });
+    }
+    if (snapshot?.gameplayKenGroup && snapshot?.ballState) {
+      updateGameplayTamaMesh(snapshot.gameplayKenGroup, snapshot.ballState);
+    }
   }
 }
 
@@ -339,6 +493,7 @@ export class GamePipeline {
   constructor(options = {}) {
     this.eventBus = options.eventBus || defaultEventBus;
     this.gameplayKenGroup = options.gameplayKenGroup || gameplayKenGroup;
+    attachKendamaAssembly(this.gameplayKenGroup, options);
 
     // Optional GameLoop reference
     this.gameLoop = options.gameLoop || null;
@@ -408,6 +563,76 @@ export class GamePipeline {
     // Execution trace logger for verification testing
     this.executionLog = [];
     this.enableTracing = false;
+
+    // Pre-allocated frozen snapshot wrappers (Zero per-frame allocation in Stage 6)
+    this._currentTimestamp = 0;
+    this._currentDtClamped = 0;
+
+    const self = this;
+
+    const frozenPhysicsState = Object.freeze(Object.defineProperties(Object.create(PhysicsState.prototype), {
+      simTime: { get: () => self.orbitalEngine.getPhysicsState().simTime, enumerable: true },
+      simulationTime: { get: () => self.orbitalEngine.getPhysicsState().simulationTime, enumerable: true },
+      substeps: { get: () => self.orbitalEngine.getPhysicsState().substeps, enumerable: true },
+      substepCount: { get: () => self.orbitalEngine.getPhysicsState().substepCount, enumerable: true },
+      bodies: { get: () => self.orbitalEngine.getPhysicsState().bodies, enumerable: true },
+    }));
+
+    const frozenMissionState = Object.freeze(Object.defineProperties(Object.create(MissionState.prototype), {
+      chapter: { get: () => self.missionController.getMissionState().chapter, enumerable: true },
+      cosmicEnergy: { get: () => self.missionController.getMissionState().cosmicEnergy, enumerable: true },
+      targetEnergy: { get: () => self.missionController.getMissionState().targetEnergy, enumerable: true },
+      chapterTargetEnergy: { get: () => self.missionController.getMissionState().chapterTargetEnergy, enumerable: true },
+      milestoneReached: { get: () => self.missionController.getMissionState().milestoneReached, enumerable: true },
+      milestoneUnlocked: { get: () => self.missionController.getMissionState().milestoneUnlocked, enumerable: true },
+      activeIntervention: { get: () => self.missionController.getMissionState().activeIntervention, enumerable: true },
+    }));
+
+    const frozenPlanetState = Object.freeze(Object.defineProperties(Object.create(PlanetState.prototype), {
+      kintsugiGlow: { get: () => self.missionController.getPlanetState().kintsugiGlow, enumerable: true },
+      kintsugiVeinGlow: { get: () => self.missionController.getPlanetState().kintsugiVeinGlow, enumerable: true },
+      atmosphereDensity: { get: () => self.missionController.getPlanetState().atmosphereDensity, enumerable: true },
+      oceanFill: { get: () => self.missionController.getPlanetState().oceanFill, enumerable: true },
+      oceanFillLevel: { get: () => self.missionController.getPlanetState().oceanFillLevel, enumerable: true },
+      ringAlpha: { get: () => self.missionController.getPlanetState().ringAlpha, enumerable: true },
+      ringFormationAlpha: { get: () => self.missionController.getPlanetState().ringFormationAlpha, enumerable: true },
+      shieldCharge: { get: () => self.missionController.getPlanetState().shieldCharge, enumerable: true },
+      scarsCount: { get: () => self.missionController.getPlanetState().scarsCount, enumerable: true },
+      scars: { get: () => self.missionController.getPlanetState().scars, enumerable: true },
+      goldIgnited: { get: () => self.missionController.getPlanetState().goldIgnited, enumerable: true },
+      isGoldIgnited: { get: () => self.missionController.getPlanetState().isGoldIgnited, enumerable: true },
+    }));
+
+    const frozenTargetState = Object.freeze(Object.defineProperties(Object.create(TargetState.prototype), {
+      cupKey: { get: () => self.missionController.getTargetState().cupKey, enumerable: true },
+      trick: { get: () => self.missionController.getTargetState().trick, enumerable: true },
+      sequenceIndex: { get: () => self.missionController.getTargetState().sequenceIndex, enumerable: true },
+      targetCup: { get: () => self.missionController.getTargetState().targetCup, enumerable: true },
+    }));
+
+    const frozenBallState = Object.freeze(Object.defineProperties(Object.create(BallState.prototype), {
+      position: { get: () => self.catchDetector.getBallState?.()?.position, enumerable: true },
+      velocity: { get: () => self.catchDetector.getBallState?.()?.velocity, enumerable: true },
+      mode: { get: () => self.catchDetector.getBallState?.()?.mode, enumerable: true },
+    }));
+
+    this._frozenSnapshot = Object.freeze(Object.defineProperties({}, {
+      physicsState: { value: frozenPhysicsState, enumerable: true },
+      missionState: { value: frozenMissionState, enumerable: true },
+      planetState: { value: frozenPlanetState, enumerable: true },
+      targetState: { value: frozenTargetState, enumerable: true },
+      ballState: {
+        get: () => {
+          if (!self.catchDetector?.getBallState) return null;
+          const bs = self.catchDetector.getBallState();
+          return bs ? frozenBallState : null;
+        },
+        enumerable: true,
+      },
+      gameplayKenGroup: { get: () => self.gameplayKenGroup, enumerable: true },
+      timestamp: { get: () => self._currentTimestamp, enumerable: true },
+      dtClamped: { get: () => self._currentDtClamped, enumerable: true },
+    }));
 
     // If gameLoop was provided during construction, emit initial target so gameLoop.activeTargetCup becomes 'big'
     if (this.gameLoop && this.missionController) {
@@ -527,20 +752,15 @@ export class GamePipeline {
     // STAGE 6: Render & Audio (Person C)
     // ------------------------------------------------------------------------
     if (this.enableTracing) this.executionLog.push({ stage: 6, event: 'STAGE_6_RENDER' });
-    const snapshot = Object.freeze({
-      physicsState: Object.freeze({ ...this.orbitalEngine.getPhysicsState() }),
-      missionState: Object.freeze({ ...this.missionController.getMissionState() }),
-      planetState: Object.freeze({ ...this.missionController.getPlanetState() }),
-      targetState: Object.freeze({ ...this.missionController.getTargetState() }),
-      ballState: this.catchDetector.getBallState ? Object.freeze({ ...this.catchDetector.getBallState() }) : null,
-      gameplayKenGroup: this.gameplayKenGroup,
-      worldScale: COSMIC_SCALE.WORLD_SCALE,
-      skyOrigin: COSMIC_SCALE.SKY_ORIGIN,
-      timestamp,
-      dtClamped
-    });
+    this._currentTimestamp = timestamp;
+    this._currentDtClamped = dtClamped;
 
-    this.worldRenderer.render(snapshot);
+    const bs = this.catchDetector?.getBallState?.();
+    if (bs) {
+      updateGameplayTamaMesh(this.gameplayKenGroup, bs);
+    }
+
+    this.worldRenderer.render(this._frozenSnapshot);
     this.totalRenderTicks++;
 
     if (this.enableTracing) this.executionLog.push({ stage: 6, event: 'TICK_COMPLETE' });
@@ -552,6 +772,8 @@ export class GamePipeline {
   reset() {
     this.accumulator = 0.0;
     this.lastTimestamp = null;
+    this._currentTimestamp = 0;
+    this._currentDtClamped = 0;
     this.totalPhysicsSteps = 0;
     this.totalRenderTicks = 0;
     this.executionLog = [];
@@ -588,6 +810,7 @@ export function tick(timestamp, xrFrame = null, forcedDelta = null) {
 export function initGame(options = {}) {
   const bus = options.eventBus || defaultEventBus;
   const kenGroup = options.gameplayKenGroup || gameplayKenGroup;
+  attachKendamaAssembly(kenGroup, options);
 
   // Convenience resolution when gameLoop is provided directly
   if (options.gameLoop) {

@@ -34,6 +34,7 @@ import { createCelestialStarfield } from '../render/CelestialStarfield.js';
 import { createCelestialStardust } from '../render/CelestialStardust.js';
 import { createCelestialLandmarks } from '../render/CelestialLandmarks.js';
 import { createCelestialBelt, updateCelestialBelt } from '../render/CelestialBelt.js';
+import { PlanetoidRenderer } from '../render/PlanetoidRenderer.js';
 import { createKendamaAssemblyGroup } from '../scene-assets/cup-preview.scene-asset.js';
 import { getKendamaPreset, KENDAMA_PRESET_IDS } from '../render/KendamaPresets.js';
 import { createTamaGeometry, BALL_RADIUS } from '../render/TamaGeometry.js';
@@ -128,6 +129,17 @@ export function initGameplayPreview() {
     const beltGroup = createCelestialBelt();
     landmarksGroup.add(beltGroup);
 
+    // Layer 6: Central Celestial Planetoid (Focal Celestial Body)
+    const planetoidRenderer = new PlanetoidRenderer();
+    planetoidRenderer.init(landmarksGroup);
+    let initialStage = 3;
+    if (typeof window !== 'undefined' && window.location?.search) {
+        const params = new URLSearchParams(window.location.search);
+        const stageParam = params.get('stage');
+        if (stageParam) initialStage = Number(stageParam) || stageParam;
+    }
+    planetoidRenderer.setDebugStage(initialStage);
+
     // 6. Central Celestial Kendama (Primary Focal Point)
     const preset = getKendamaPreset(KENDAMA_PRESET_IDS.CELESTIAL);
     const kendama = createKendamaAssemblyGroup(preset.kenMaterials, { preset });
@@ -194,6 +206,7 @@ export function initGameplayPreview() {
             stardustMesh.material.uniforms.uTime.value += dt;
         }
         updateCelestialBelt(beltGroup, dt);
+        planetoidRenderer.update(dt, null, null);
 
         kendama.updateMatrixWorld(true);
         renderer.render(scene, camera);

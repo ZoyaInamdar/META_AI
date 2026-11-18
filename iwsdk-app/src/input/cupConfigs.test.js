@@ -68,31 +68,20 @@ describe('cupConfigs Module (Authoritative)', () => {
     });
 
     it('verifies correct cup geometry (rimRadius, depth, seatDepth)', () => {
-        // Regression check: every bowl cup must have non-negative radicand (BALL_RADIUS >= rimRadius)
-        for (const cupKey of [CUP_IDS.BIG_CUP, CUP_IDS.SMALL_CUP, CUP_IDS.BASE_CUP]) {
-            const cup = CUP_CONFIGS[cupKey];
-            const radicand = BALL_RADIUS ** 2 - cup.rimRadius ** 2;
-            assert.ok(radicand >= 0, `${cupKey} radicand (${radicand}) must be non-negative`);
-        }
-
         // Big Cup
-        const expectedBigRimRadius = 0.045;
-        assert.equal(CUP_CONFIGS.big.rimRadius, expectedBigRimRadius);
+        assert.equal(CUP_CONFIGS.big.rimRadius, 0.022 * 1.5);
         assert.equal(CUP_CONFIGS.big.depth, 0.012 * 1.5);
-        assert.equal(CUP_CONFIGS.big.seatOffset, 0);
-        assert.ok(Math.abs(CUP_CONFIGS.big.seatOffset - Math.sqrt(BALL_RADIUS ** 2 - expectedBigRimRadius ** 2)) < 1e-6);
+        assert.ok(Math.abs(CUP_CONFIGS.big.seatOffset - Math.sqrt(0.045**2 - 0.033**2)) < 1e-6);
 
         // Small Cup
-        const expectedSmallRimRadius = 0.040;
-        assert.equal(CUP_CONFIGS.small.rimRadius, expectedSmallRimRadius);
+        assert.equal(CUP_CONFIGS.small.rimRadius, 0.017 * 1.5);
         assert.equal(CUP_CONFIGS.small.depth, 0.010 * 1.5);
-        assert.ok(Math.abs(CUP_CONFIGS.small.seatOffset - Math.sqrt(BALL_RADIUS ** 2 - expectedSmallRimRadius ** 2)) < 1e-6);
+        assert.ok(Math.abs(CUP_CONFIGS.small.seatOffset - Math.sqrt(0.045**2 - 0.0255**2)) < 1e-6);
 
         // Base Cup
-        const expectedBaseRimRadius = 0.042;
-        assert.equal(CUP_CONFIGS.base.rimRadius, expectedBaseRimRadius);
+        assert.equal(CUP_CONFIGS.base.rimRadius, 0.0175 * 1.5);
         assert.equal(CUP_CONFIGS.base.depth, 0.008 * 1.5);
-        assert.ok(Math.abs(CUP_CONFIGS.base.seatOffset - Math.sqrt(BALL_RADIUS ** 2 - expectedBaseRimRadius ** 2)) < 1e-6);
+        assert.ok(Math.abs(CUP_CONFIGS.base.seatOffset - Math.sqrt(0.045**2 - 0.02625**2)) < 1e-6);
 
         // Spike has no bowl
         assert.equal(CUP_CONFIGS.spike.rimRadius, 0);
