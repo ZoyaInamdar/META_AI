@@ -23,7 +23,7 @@
  *    - Stage-aware color palettes for Stages 2, 3, 4, 5.
  *    - Smooth multi-stage twinkle: soft glow -> flare -> soft glow -> 0.
  * 5. Guarantees clear visual handoff:
- *    - Celebration completes entirely (3.80s) BEFORE the PlanetUnlockUI card appears.
+ *    - Celebration completes entirely (~5.0s presentation gap: 3.4s spin + 1.4s settle) BEFORE the PlanetUnlockUI card appears.
  *    - Seamlessly invokes PlanetUnlockUI.showStage(targetStage) at completion.
  * 6. Exposes public runtime API:
  *    - play(stage), debugShow(stage), getState(), getPhase(), getProgress(), reset()
@@ -71,12 +71,12 @@ export const CelebrationPhase = Object.freeze({
 /**
  * Celebration timing constants in seconds.
  * 3.4s slow, majestic 360° spin with sinusoidal ease-in-out curve.
- * 3.8s total duration ensuring clean settle before handoff to PlanetUnlockUI.
+ * 5.0s total duration ensuring ~5 second presentation gap before handoff to PlanetUnlockUI.
  */
 export const CELEBRATION_SPIN_DURATION = 3.40;
 export const CELEBRATION_SPIN_START = 0.20;
 export const CELEBRATION_SPIN_END = CELEBRATION_SPIN_START + CELEBRATION_SPIN_DURATION; // 3.60s
-export const CELEBRATION_TOTAL_DURATION = 3.80;
+export const CELEBRATION_TOTAL_DURATION = 5.00;
 
 /**
  * Number of sparkles in the constellation.

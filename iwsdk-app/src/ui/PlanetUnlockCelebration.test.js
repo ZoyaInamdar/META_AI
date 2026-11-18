@@ -119,12 +119,12 @@ describe('PlanetUnlockCelebration - Pre-Unlock Spin & Sparkles', () => {
     celebration.update(1.5);
     assert.equal(mockUnlockUI.showStage.mock.calls.length, 0);
 
-    // Nearly finished (e.g. t = 3.5s < 3.80s)
-    celebration.update(2.0); // total 3.5s < 3.80s
+    // Settling on newly awakened planet (e.g. t = 3.5s < 5.00s)
+    celebration.update(2.0); // total 3.5s < 5.00s
     assert.equal(mockUnlockUI.showStage.mock.calls.length, 0);
 
-    // Concludes at t >= 3.80s
-    celebration.update(0.35); // total 3.85s >= 3.80s
+    // Concludes after ~5 second presentation gap at t >= 5.00s
+    celebration.update(1.55); // total 5.05s >= 5.00s
     assert.equal(mockUnlockUI.showStage.mock.calls.length, 1);
     assert.equal(mockUnlockUI.showStage.mock.calls[0][0], 2);
     assert.equal(celebration.getState(), CelebrationState.COMPLETE);

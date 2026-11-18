@@ -34,6 +34,7 @@ import { PlanetEvolutionController } from '../gameplay/PlanetEvolutionController
 import { PlanetTransformationController } from '../game/PlanetTransformationController.js';
 import { PlanetUnlockUI } from '../ui/PlanetUnlockUI.js';
 import { PlanetUnlockCelebration } from '../ui/PlanetUnlockCelebration.js';
+import { ProgressionFeedbackUI } from '../ui/ProgressionFeedbackUI.js';
 import NarrativeDirector from '../game/NarrativeDirector.js';
 import OrreryVisualSystem, { ORRERY_DEFAULT_ANCHOR } from './OrreryVisualSystem.js';
 import { Vector3 } from 'three';
@@ -345,6 +346,9 @@ export class CelestialEnvironmentSystem extends createSystem({
     /** @type {OrreryVisualSystem | null} */
     orreryVisualSystem = null;
 
+    /** @type {ProgressionFeedbackUI | null} */
+    progressionFeedbackUI = null;
+
     init() {
         this.mode = 'showroom';
         this.activeConfig = SHOWROOM_ENVIRONMENT_CONFIG;
@@ -366,6 +370,7 @@ export class CelestialEnvironmentSystem extends createSystem({
         this.unlockCelebration = null;
         this.narrativeDirector = null;
         this.orreryVisualSystem = null;
+        this.progressionFeedbackUI = null;
         this.lastBallState = null;
         this.lastPlanetState = null;
         this._scratchSeatedPos = new Vector3();
@@ -670,6 +675,47 @@ export class CelestialEnvironmentSystem extends createSystem({
     }
 
     /**
+     * Lazily instantiates and returns the canonical ProgressionFeedbackUI presentation layer.
+     * @returns {ProgressionFeedbackUI}
+     */
+    ensureProgressionFeedbackUI() {
+        if (!this.evolutionController) {
+            this.ensurePlanetoidRenderer();
+        }
+        if (!this.narrativeDirector) {
+            this.ensureOrreryVisualSystem();
+        }
+        if (!this.progressionFeedbackUI) {
+            this.progressionFeedbackUI = new ProgressionFeedbackUI({
+                eventBus: defaultEventBus,
+                parentGroup: this.landmarksGroup || (typeof this.world?.scene?.add === 'function' ? this.world.scene : null),
+                evolutionController: this.evolutionController,
+                narrativeDirector: this.narrativeDirector,
+            });
+            if (this.progressionFeedbackUI.group) {
+                this.progressionFeedbackUI.group.visible = (this.mode === 'gameplay');
+            }
+        } else {
+            if (this.landmarksGroup && this.progressionFeedbackUI.group?.parent !== this.landmarksGroup) {
+                this.progressionFeedbackUI.setParentGroup(this.landmarksGroup);
+            } else if (typeof this.world?.scene?.add === 'function' && !this.progressionFeedbackUI.group?.parent) {
+                this.progressionFeedbackUI.setParentGroup(this.world.scene);
+            }
+            if (!this.progressionFeedbackUI.evolutionController && this.evolutionController) {
+                this.progressionFeedbackUI.evolutionController = this.evolutionController;
+            }
+            if (!this.progressionFeedbackUI.narrativeDirector && this.narrativeDirector) {
+                this.progressionFeedbackUI.narrativeDirector = this.narrativeDirector;
+            }
+        }
+        const globalScope = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
+        if (globalScope) {
+            globalScope.progressionFeedbackUI = this.progressionFeedbackUI;
+        }
+        return this.progressionFeedbackUI;
+    }
+
+    /**
      * Ensures the procedural PlanetoidRenderer instance is created and attached to the Three.js scene.
      * Reuses existing instance across showroom/gameplay transitions to prevent duplicate meshes.
      * Attaches to landmarksGroup so it shares the celestial structures hierarchy
@@ -783,6 +829,7 @@ export class CelestialEnvironmentSystem extends createSystem({
                 globalScope.narrativeDirector = this.narrativeDirector;
                 globalScope.orreryVisualSystem = this.orreryVisualSystem;
                 globalScope.__ORRERY_SYSTEM__ = this.orreryVisualSystem;
+                globalScope.progressionFeedbackUI = this.progressionFeedbackUI;
                 globalScope.planetUnlockUIInstance = this.unlockUI;
                 globalScope.planetUnlockUI = {
                     get group() { return globalScope.planetUnlockUIInstance?.group; },
@@ -1152,41 +1199,31 @@ export class CelestialEnvironmentSystem extends createSystem({
             this.originalStudioFloorVisible = this.visibilityBaseline.get(floor) ?? floor.visible;
         }
 
-        // 2. Select Plinth and children: keep Kendama root visible, hide pedestal & accessories
+        // 2. Select Plinth and children: hide completely in gameplay mode (canonical gameplay Ken is in gameplayKenGroup)
         const selectPlinth = this.findSceneObject('select-plinth', 'Select Plinth');
-        const cupPreview = this.findSceneObject('cup-preview', 'Big Cup Preview');
-
         if (selectPlinth) {
             this.recordBaseline(selectPlinth);
-            selectPlinth.visible = true; // Crucial: must remain visible so cup-preview renders
+            selectPlinth.visible = false;
             this.wireChildAddedListener(selectPlinth, 'select-plinth');
 
             if (Array.isArray(selectPlinth.children)) {
                 for (const child of selectPlinth.children) {
-                    const isKendama = (child === cupPreview) ||
-                        (child.name === 'cup-preview') ||
-                        (child.name?.includes('preview-root')) ||
-                        (typeof child.getObjectByName === 'function' && !!child.getObjectByName('big-cup-three-quarter'));
-
                     this.recordBaseline(child);
-                    if (isKendama) {
-                        child.visible = true;
-                    } else {
-                        child.visible = false;
-                    }
+                    child.visible = false;
                 }
             }
         }
 
-        // 3. Kendama inspection views: hide auxiliary views, keep center assembly visible
-        const resolvedCupPreview = cupPreview || selectPlinth?.getObjectByName?.('cup-preview') || null;
-        if (resolvedCupPreview) {
-            this.recordBaseline(resolvedCupPreview);
-            resolvedCupPreview.visible = true;
-            this.wireChildAddedListener(resolvedCupPreview, 'cup-preview');
+        // 3. Kendama showroom preview views: hide completely in gameplay mode
+        const cupPreview = this.findSceneObject('cup-preview', 'Big Cup Preview') ||
+            selectPlinth?.getObjectByName?.('cup-preview') || null;
+        if (cupPreview) {
+            this.recordBaseline(cupPreview);
+            cupPreview.visible = false;
+            this.wireChildAddedListener(cupPreview, 'cup-preview');
 
             for (const auxName of KENDAMA_AUXILIARY_MODELS_TO_HIDE) {
-                const auxModel = resolvedCupPreview.getObjectByName?.(auxName);
+                const auxModel = cupPreview.getObjectByName?.(auxName);
                 if (auxModel) {
                     this.recordBaseline(auxModel);
                     auxModel.visible = false;
@@ -1194,50 +1231,17 @@ export class CelestialEnvironmentSystem extends createSystem({
             }
 
             for (const activeName of KENDAMA_ACTIVE_MODEL_TO_KEEP) {
-                const activeModel = resolvedCupPreview.getObjectByName?.(activeName);
+                const activeModel = cupPreview.getObjectByName?.(activeName);
                 if (activeModel) {
                     this.recordBaseline(activeModel);
-                    activeModel.visible = true;
+                    activeModel.visible = false;
                 }
             }
 
-            // Gameplay framing: strengthen Kendama focal point to occupy ~10-15% of vertical frame
-            if (!this.kendamaOriginalTransform) {
-                this.kendamaOriginalTransform = {
-                    posZ: resolvedCupPreview.position?.z ?? -0.02,
-                    posY: resolvedCupPreview.position?.y ?? 1.1,
-                    scaleX: resolvedCupPreview.scale?.x ?? 1.0,
-                    scaleY: resolvedCupPreview.scale?.y ?? 1.0,
-                    scaleZ: resolvedCupPreview.scale?.z ?? 1.0,
-                };
-            }
-            if (resolvedCupPreview.position && typeof resolvedCupPreview.position.set === 'function') {
-                resolvedCupPreview.position.z = 0.38;
-                resolvedCupPreview.position.y = 1.12;
-            }
-            if (resolvedCupPreview.scale && typeof resolvedCupPreview.scale.set === 'function') {
-                resolvedCupPreview.scale.set(1.35, 1.35, 1.35);
-            }
-
-            // The physical Kendama ball (celestial-tama) remains visible in gameplay mode
-            const tamaMesh = resolvedCupPreview.getObjectByName?.('celestial-tama');
+            const tamaMesh = cupPreview.getObjectByName?.('celestial-tama');
             if (tamaMesh) {
                 this.recordBaseline(tamaMesh);
-                tamaMesh.visible = true;
-            }
-
-            const planetoid = this.ensurePlanetoidRenderer();
-            if (planetoid) {
-                this.updatePlanetoidAnchorFromCamera();
-                if (planetoid.group) {
-                    const isCh2Or5Active = (this.orreryVisualSystem && (
-                        this.orreryVisualSystem.getChapter() === 2 ||
-                        this.orreryVisualSystem.getChapter() === 5 ||
-                        (typeof this.orreryVisualSystem.isChapter2DebugActive === 'function' && this.orreryVisualSystem.isChapter2DebugActive()) ||
-                        (typeof this.orreryVisualSystem.isChapter5DebugActive === 'function' && this.orreryVisualSystem.isChapter5DebugActive())
-                    ));
-                    planetoid.group.visible = !isCh2Or5Active && ((this.mode === 'planet-showcase') || planetoid.isDebugMode());
-                }
+                tamaMesh.visible = false;
             }
         }
     }
@@ -1498,11 +1502,18 @@ export class CelestialEnvironmentSystem extends createSystem({
                 }
                 orrery.setVisible(true);
             }
+            const feedbackUI = this.ensureProgressionFeedbackUI();
+            if (feedbackUI) {
+                feedbackUI.setVisible(true);
+            }
         } else {
             // Restore original showroom visibility states from baseline
             this.restoreShowroomVisibility();
 
             // Hide celestial components without disposing them
+            if (this.progressionFeedbackUI) {
+                this.progressionFeedbackUI.setVisible(false);
+            }
             if (this.nebulaMesh) {
                 this.nebulaMesh.visible = false;
             }
@@ -1667,14 +1678,12 @@ export class CelestialEnvironmentSystem extends createSystem({
             }
         }
 
-        // Ensure standalone foreground PlanetoidRenderer never competes during Chapter 2 or Chapter 5
-        const isCh2Or5Active = (this.orreryVisualSystem && (
-            this.orreryVisualSystem.getChapter() === 2 ||
+        // In Chapter 5 (terminal finale), suppress stage unlock cards and celebration
+        const isCh5Active = (this.orreryVisualSystem && (
             this.orreryVisualSystem.getChapter() === 5 ||
-            (typeof this.orreryVisualSystem.isChapter2DebugActive === 'function' && this.orreryVisualSystem.isChapter2DebugActive()) ||
             (typeof this.orreryVisualSystem.isChapter5DebugActive === 'function' && this.orreryVisualSystem.isChapter5DebugActive())
         ));
-        if (isCh2Or5Active) {
+        if (isCh5Active) {
             if (this.planetoidRenderer?.group && !this.planetoidRenderer.isDebugMode()) {
                 this.planetoidRenderer.group.visible = false;
             }
@@ -1716,6 +1725,7 @@ export class CelestialEnvironmentSystem extends createSystem({
             this.transformationController?.update(deltaSeconds);
             this.unlockCelebration?.update(deltaSeconds);
             this.unlockUI?.update(deltaSeconds);
+            this.progressionFeedbackUI?.update(deltaSeconds);
         }
 
         // Animate procedural Orrery visual system
@@ -1772,6 +1782,10 @@ export class CelestialEnvironmentSystem extends createSystem({
         if (this.narrativeDirector) {
             this.narrativeDirector.destroy();
             this.narrativeDirector = null;
+        }
+        if (this.progressionFeedbackUI) {
+            this.progressionFeedbackUI.destroy();
+            this.progressionFeedbackUI = null;
         }
         if (this.unlockCelebration) {
             this.unlockCelebration.destroy();

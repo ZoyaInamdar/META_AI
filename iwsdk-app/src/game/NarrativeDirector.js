@@ -512,7 +512,7 @@ export class NarrativeDirector {
 
   /**
    * Ingests TRANSFORMATION_STARTED notification when cinematic begins.
-   * Moves narrative lifecycle from READY to EXECUTING.
+   * Moves narrative lifecycle from READY or IDLE to EXECUTING.
    *
    * @private
    * @param {Object} payload
@@ -614,10 +614,8 @@ export class NarrativeDirector {
       return;
     }
 
-    if (this.lifecycleState !== NarrativeLifecycle.EXECUTING) {
-      return;
-    }
-
+    // Chapters 3 and 4: Planetary transformation completion satisfies the chapter maneuver
+    this.lifecycleState = NarrativeLifecycle.EXECUTING;
     this.completeManeuver();
   }
 

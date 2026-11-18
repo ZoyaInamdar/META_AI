@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MissionController } from '../src/mission/MissionController.js';
-import { MissionState, PlanetState, Events, CupKey, TrickType } from '../src/contracts/Interfaces.js';
+import { MissionState, PlanetState, Events, CupKey, TrickType, ScoreEvent, CatchType } from '../src/contracts/Interfaces.js';
 import { MISSION_THRESHOLDS } from '../src/mission/missionConfig.js';
 
 describe('MissionController: Cosmic Progression & Visual Easing (Step 1.7)', () => {
@@ -106,6 +106,65 @@ describe('MissionController: Cosmic Progression & Visual Easing (Step 1.7)', () 
       // Duplicate event
       controller.handleScore({ eventId: 'evt_101', awardedEnergy: 50 });
       expect(controller.getMissionState().cosmicEnergy).toBe(50);
+    });
+
+    describe('P0 Score Event Payload Normalization', () => {
+      it('Test A: canonical wrapped event is accepted, energy applied, and cadence read correctly', () => {
+        // Transition to Chapter 2 to verify cadence telemetry reading
+        controller.setChapter(2);
+
+        const wrappedEvent = {
+          payload: {
+            eventId: 'canonical-wrap-1',
+            catchType: 'CLEAN',
+            deltaSeconds: 1.75,
+            isOnCadence: true
+          },
+          awardedEnergy: 45
+        };
+
+        const state = controller.handleScore(wrappedEvent);
+        expect(state.cosmicEnergy).toBe(45);
+
+        const telemetry = controller.getCadenceTelemetry();
+        expect(telemetry.lastCatchDeltaSeconds).toBeCloseTo(1.75);
+        expect(telemetry.onBeatChapter2Catches).toBe(1);
+        expect(telemetry.totalChapter2Catches).toBe(1);
+      });
+
+      it('Test B: duplicate wrapped event is processed only once via eventId deduplication', () => {
+        const wrappedEvent = {
+          payload: {
+            eventId: 'dup-wrap-99',
+            catchType: 'CLEAN',
+            deltaSeconds: 1.75,
+            isOnCadence: true
+          },
+          awardedEnergy: 60
+        };
+
+        controller.handleScore(wrappedEvent);
+        expect(controller.getMissionState().cosmicEnergy).toBe(60);
+
+        // Send duplicate wrapped event with same eventId
+        const state2 = controller.handleScore(wrappedEvent);
+        expect(state2.cosmicEnergy).toBe(60);
+      });
+
+      it('Test C: raw ScoreEvent object compatibility is fully preserved', () => {
+        const rawScoreEvent = new ScoreEvent({
+          eventId: 'raw-score-inst-1',
+          catchType: CatchType.CLEAN,
+          awardedEnergy: 35
+        });
+
+        const state = controller.handleScore(rawScoreEvent);
+        expect(state.cosmicEnergy).toBe(35);
+
+        // Duplicate raw ScoreEvent
+        controller.handleScore(rawScoreEvent);
+        expect(controller.getMissionState().cosmicEnergy).toBe(35);
+      });
     });
   });
 
