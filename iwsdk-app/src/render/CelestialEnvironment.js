@@ -291,6 +291,9 @@ export class CelestialEnvironmentSystem extends createSystem({
     /** @type {any} */
     beltGroup = null;
 
+    /** @type {any} */
+    gameplayKenGroup = null;
+
     /** @type {boolean | null} */
     originalStudioFloorVisible = null;
 
@@ -358,6 +361,7 @@ export class CelestialEnvironmentSystem extends createSystem({
         this.stardustMesh = null;
         this.landmarksGroup = null;
         this.beltGroup = null;
+        this.gameplayKenGroup = null;
         this.originalStudioFloorVisible = null;
         this.visibilityBaseline = new Map();
         this.kendamaOriginalTransform = null;
@@ -443,8 +447,45 @@ export class CelestialEnvironmentSystem extends createSystem({
      */
     recordBaseline(obj) {
         if (!obj || typeof obj.visible !== 'boolean') return;
+        if (obj === this.gameplayKenGroup || obj?.name === 'gameplay-ken-group') return;
         if (!this.visibilityBaseline.has(obj)) {
             this.visibilityBaseline.set(obj, obj.visible);
+        }
+    }
+
+    /**
+     * Registers canonical gameplayKenGroup and applies current mode visibility.
+     * @param {any} kenGroup
+     */
+    setGameplayKenGroup(kenGroup) {
+        this.gameplayKenGroup = kenGroup;
+        this.updateGameplayKenVisibility();
+    }
+
+    /**
+     * Resolves canonical gameplayKenGroup from instance reference or scene hierarchy.
+     * @returns {any}
+     */
+    getGameplayKenGroup() {
+        if (this.gameplayKenGroup) return this.gameplayKenGroup;
+        const found = this.findSceneObject('gameplay-ken-group') ||
+                      this.world?.scene?.getObjectByName?.('gameplay-ken-group') ||
+                      null;
+        if (found) {
+            this.gameplayKenGroup = found;
+        }
+        return found;
+    }
+
+    /**
+     * Explicitly enforces mode-dependent visibility for gameplayKenGroup:
+     * - 'gameplay': visible = true
+     * - 'showroom' | 'planet-showcase': visible = false
+     */
+    updateGameplayKenVisibility() {
+        const ken = this.getGameplayKenGroup();
+        if (ken && typeof ken.visible === 'boolean') {
+            ken.visible = (this.mode === 'gameplay');
         }
     }
 
@@ -1244,6 +1285,9 @@ export class CelestialEnvironmentSystem extends createSystem({
                 tamaMesh.visible = false;
             }
         }
+
+        // 4. Canonical gameplay Kendama: visible exclusively in gameplay mode
+        this.updateGameplayKenVisibility();
     }
 
     /**
@@ -1345,6 +1389,9 @@ export class CelestialEnvironmentSystem extends createSystem({
                 planetoid.group.visible = true;
             }
         }
+
+        // 4. Canonical gameplay Kendama: hidden in showcase mode
+        this.updateGameplayKenVisibility();
     }
 
     /**
@@ -1392,6 +1439,9 @@ export class CelestialEnvironmentSystem extends createSystem({
                 }
             }
         }
+
+        // Hide canonical gameplay Kendama in showroom mode (only showroom preset Kendama on plinth is visible)
+        this.updateGameplayKenVisibility();
     }
 
     /**
@@ -1540,6 +1590,7 @@ export class CelestialEnvironmentSystem extends createSystem({
             }
         }
 
+        this.updateGameplayKenVisibility();
         return true;
     }
 

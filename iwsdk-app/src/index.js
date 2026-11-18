@@ -140,8 +140,13 @@ World.create(document.getElementById('scene-container'), projectOptions).then((w
             game.gameplayKenGroup.updateMatrixWorld(true);
         }
         world.scene.add(game.gameplayKenGroup);
-        if (envSystem?.progressionFeedbackUI) {
-            envSystem.progressionFeedbackUI.setKenGroup(game.gameplayKenGroup);
+        if (envSystem) {
+            if (typeof envSystem.setGameplayKenGroup === 'function') {
+                envSystem.setGameplayKenGroup(game.gameplayKenGroup);
+            }
+            if (envSystem.progressionFeedbackUI) {
+                envSystem.progressionFeedbackUI.setKenGroup(game.gameplayKenGroup);
+            }
         }
     }
 

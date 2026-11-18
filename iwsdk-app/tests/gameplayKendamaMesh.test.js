@@ -239,7 +239,7 @@ describe('Gameplay Kendama & Tama Mesh Integration (P0 Fix 2)', () => {
       expect(ken.quaternion.y).toBeCloseTo(0.1);
     });
 
-    it('CelestialEnvironmentSystem hides showroom select-plinth/cup-preview in gameplay mode without touching gameplayKenGroup', () => {
+    it('CelestialEnvironmentSystem hides showroom select-plinth/cup-preview in gameplay mode and hides gameplayKenGroup in showroom mode', () => {
       const sceneGroup = new Group();
       const selectPlinth = new Group(); selectPlinth.name = 'select-plinth'; selectPlinth.visible = true;
       const cupPreview = new Group(); cupPreview.name = 'cup-preview'; cupPreview.visible = true;
@@ -257,17 +257,35 @@ describe('Gameplay Kendama & Tama Mesh Integration (P0 Fix 2)', () => {
       const envSystem = new CelestialEnvironmentSystem(mockWorld);
       envSystem.init();
 
-      // Gameplay mode: plinth & showroom cup preview are hidden
+      // Showroom initial: plinth & showroom cup preview are visible, gameplayKen is hidden
+      envSystem.setGameplayKenGroup(gameplayKen);
+      expect(selectPlinth.visible).toBe(true);
+      expect(cupPreview.visible).toBe(true);
+      expect(gameplayKen.visible).toBe(false);
+
+      // Cycle 1: Switch to gameplay mode
       envSystem.setMode('gameplay');
       expect(selectPlinth.visible).toBe(false);
       expect(cupPreview.visible).toBe(false);
       expect(gameplayKen.visible).toBe(true);
 
-      // Showroom mode: plinth & showroom cup preview are restored
+      // Cycle 2: Switch to showroom mode
       envSystem.setMode('showroom');
       expect(selectPlinth.visible).toBe(true);
       expect(cupPreview.visible).toBe(true);
+      expect(gameplayKen.visible).toBe(false);
+
+      // Cycle 3: Switch to gameplay mode
+      envSystem.setMode('gameplay');
+      expect(selectPlinth.visible).toBe(false);
+      expect(cupPreview.visible).toBe(false);
       expect(gameplayKen.visible).toBe(true);
+
+      // Cycle 4: Switch to showroom mode
+      envSystem.setMode('showroom');
+      expect(selectPlinth.visible).toBe(true);
+      expect(cupPreview.visible).toBe(true);
+      expect(gameplayKen.visible).toBe(false);
 
       envSystem.destroy();
     });
