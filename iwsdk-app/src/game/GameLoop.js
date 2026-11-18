@@ -76,7 +76,7 @@ export class GameLoop {
       catchFlow = null,
       detector = null,
       scoreManager = null,
-      initialCup = CupKey.SPIKE,
+      initialCup = undefined,
       targetCadenceSeconds = 1.75,
       detectorOptions = {},
     } = options;
@@ -92,10 +92,22 @@ export class GameLoop {
       ? poseFilter
       : new PoseFilter(filterOptions);
 
+    this.targetOverride = options.targetOverride || options.target || null;
+
+    // Resolve initial seated cup:
+    // 1. Explicitly configured options.initialCup if provided.
+    // 2. Otherwise targetOverride / options.target if provided.
+    // 3. Otherwise default unconfigured starting cup CupKey.SPIKE (transitions to mission target on boot).
+    const resolvedInitialCup = (options.initialCup !== undefined)
+      ? options.initialCup
+      : (this.targetOverride || CupKey.SPIKE);
+
+    this.activeTargetCup = this.targetOverride || resolvedInitialCup;
+
     // Component instances
     this.trajectory = trajectory || new BallTrajectory();
     this.catchFlow = catchFlow || new CatchFlow({
-      initialCup,
+      initialCup: resolvedInitialCup,
       kenPose: this.gameplayKenGroup,
     });
 
@@ -109,9 +121,6 @@ export class GameLoop {
     this.scoreEngine = scoreManager || new ScoreManager({
       targetCadenceSeconds,
     });
-
-    this.targetOverride = options.targetOverride || options.target || null;
-    this.activeTargetCup = this.targetOverride || initialCup;
     this._isTrackingValid = true;
     this.lastEvaluatedVelocity = null;
     this.lastEvaluatedBallPosition = null;
@@ -151,6 +160,7 @@ export class GameLoop {
     // Staging queues across intra-frame stages (Stage 2 -> Stage 3)
     this._pendingCatchResult = null;
     this._pendingMissFlightId = null;
+    this._pendingAssistedCandidate = null;
 
     // Pre-allocated BallState to eliminate per-frame GC churn
     this._ballState = new BallState(
@@ -166,6 +176,10 @@ export class GameLoop {
       }
       if (target && target.cupKey) {
         this.activeTargetCup = target.cupKey;
+        // Align seated cup with initial mission target before any flight has launched
+        if (this.catchFlow && this.catchFlow.state === 'seated' && !this.trajectory?.flightId) {
+          this.catchFlow.resetSeatCup(this.activeTargetCup, this.gameplayKenGroup);
+        }
       }
     });
 
@@ -448,50 +462,97 @@ export class GameLoop {
     const flowResult = this.catchFlow.update(dt, activeKen, {
       ...trajState,
       deferExpiration: true,
+      targetCupKey: this.activeTargetCup,
     });
 
     // 3. Catch candidate evaluation while in air mode
-    if (this.catchFlow.state === 'air' && this._isTrackingValid) {
-      const ballPos = this.catchFlow.ballPosition;
-      const rawVel = trajState?.velocity ?? this.trajectory?.state?.velocity ?? { x: 0, y: 0, z: 0 };
-      const lastAir = trajState?.lastAirVelocity ?? this.trajectory?.state?.lastAirVelocity ?? this.trajectory?.lastAirVelocity;
-      const isLandingTick = (!trajState?.isAirborne || trajState?.mode === 'seated');
-      const ballVel = (isLandingTick && lastAir) ? lastAir : rawVel;
-      const nowSec = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    const nowSec = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    const isLandingTick = (!trajState?.isAirborne || trajState?.mode === 'seated' || (trajState?.flightDuration && trajState?.elapsed >= trajState?.flightDuration));
 
-      this.lastEvaluatedVelocity = ballVel ? { ...ballVel } : { x: 0, y: 0, z: 0 };
-      this.lastEvaluatedBallPosition = ballPos ? { ...ballPos } : { x: 0, y: 0, z: 0 };
+    // Clear candidate if flight ID changed
+    if (this._pendingAssistedCandidate && this._pendingAssistedCandidate.flightId !== this.trajectory.flightId) {
+      this._pendingAssistedCandidate = null;
+    }
 
-      const evalRes = this.detector.evaluateCatch(
-        ballPos,
-        ballVel,
-        this.activeTargetCup,
-        nowSec,
-        dt
-      );
-      this.lastCatchEvaluation = evalRes;
-      this.lastTickEvaluatedCatch = true;
+    if (this.catchFlow.state === 'air') {
+      if (this._isTrackingValid) {
+        const ballPos = this.catchFlow.ballPosition;
+        const rawVel = trajState?.velocity ?? this.trajectory?.state?.velocity ?? { x: 0, y: 0, z: 0 };
+        const lastAir = trajState?.lastAirVelocity ?? this.trajectory?.state?.lastAirVelocity ?? this.trajectory?.lastAirVelocity;
+        const ballVel = (isLandingTick && lastAir) ? lastAir : rawVel;
 
-      // Process catch only when BOTH evalRes.confirmed and evalRes.valid are true
-      if (evalRes && evalRes.confirmed && evalRes.valid) {
-        this.catchFlow.onCatchConfirmed(evalRes.cupKey, ballPos);
+        this.lastEvaluatedVelocity = ballVel ? { ...ballVel } : { x: 0, y: 0, z: 0 };
+        this.lastEvaluatedBallPosition = ballPos ? { ...ballPos } : { x: 0, y: 0, z: 0 };
 
-        const catchResult = new CatchResult({
-          type: evalRes.catchType === 'clean' ? CatchType.CLEAN : CatchType.ASSISTED,
-          cupKey: evalRes.cupKey,
-          distance: evalRes.details?.distance ?? 0,
-          relativeSpeed: evalRes.details?.relativeSpeed ?? 0,
-          alignmentDot: evalRes.details?.approachDot ?? 0,
-          timestamp: nowSec * 1000,
-        });
+        const evalRes = this.detector.evaluateCatch(
+          ballPos,
+          ballVel,
+          this.activeTargetCup,
+          nowSec,
+          dt
+        );
+        this.lastCatchEvaluation = evalRes;
+        this.lastTickEvaluatedCatch = true;
 
-        this._pendingCatchResult = {
-          catchResult,
-          flightId: this.trajectory.flightId,
-          timestampMs: nowSec * 1000,
-        };
+        if (this._pendingAssistedCandidate) {
+          const cand = this._pendingAssistedCandidate;
 
-        this.eventBus.emit(Events.CATCH, catchResult);
+          // Priority 1: Upgrade to CLEAN immediately if any subsequent frame is valid and clean
+          if (evalRes && evalRes.valid && evalRes.catchType === 'clean') {
+            this._finalizeCatch('clean', evalRes.cupKey, ballPos, evalRes.details, nowSec);
+          } else {
+            // Priority 2: Update closest approach & track divergence
+            const curDist = evalRes?.details?.distance;
+            const DIVERGENCE_THRESHOLD = 0.005; // 5mm threshold to filter out hand jitter
+
+            if (typeof curDist === 'number' && Number.isFinite(curDist)) {
+              if (curDist < cand.minDistance) {
+                cand.minDistance = curDist;
+                cand.divergingCount = 0;
+                if (evalRes.valid) {
+                  cand.details = evalRes.details;
+                  cand.ballPos = { ...ballPos };
+                }
+              } else if (curDist > cand.minDistance + DIVERGENCE_THRESHOLD) {
+                cand.divergingCount++;
+              } else {
+                cand.divergingCount = 0;
+              }
+            }
+
+            // Finalize as assisted when landing state reached or distance reliably diverges
+            if (isLandingTick || cand.divergingCount >= 2) {
+              this._finalizeCatch('assisted', cand.cupKey, cand.ballPos, cand.details, nowSec);
+            }
+          }
+        } else {
+          // Process initial catch confirmation
+          if (evalRes && evalRes.confirmed && evalRes.valid) {
+            if (evalRes.catchType === 'clean') {
+              this._finalizeCatch('clean', evalRes.cupKey, ballPos, evalRes.details, nowSec);
+            } else if (evalRes.catchType === 'assisted') {
+              if (isLandingTick) {
+                this._finalizeCatch('assisted', evalRes.cupKey, ballPos, evalRes.details, nowSec);
+              } else {
+                this._pendingAssistedCandidate = {
+                  cupKey: evalRes.cupKey,
+                  ballPos: { ...ballPos },
+                  minDistance: evalRes.details?.distance ?? Infinity,
+                  details: evalRes.details,
+                  divergingCount: 0,
+                  flightId: this.trajectory.flightId,
+                };
+              }
+            }
+          }
+        }
+      } else {
+        // Tracking temporarily lost: preserve pending candidate.
+        // If trajectory lands while untracked, finalize as assisted rather than falsely expiring as miss.
+        if (this._pendingAssistedCandidate && isLandingTick) {
+          const cand = this._pendingAssistedCandidate;
+          this._finalizeCatch('assisted', cand.cupKey, cand.ballPos, cand.details, nowSec);
+        }
       }
     }
 
@@ -499,25 +560,67 @@ export class GameLoop {
     // (a) Depth-based miss detected by CatchFlow
     if (flowResult && flowResult.type === 'MISS') {
       this._pendingMissFlightId = flowResult.flightId;
+      this._pendingAssistedCandidate = null;
     } else if (this.catchFlow.state === 'air') {
-      // (b) Flight expiration miss: if still in 'air' (no catch confirmed) and trajectory ended
-      const expirationMiss = typeof this.catchFlow.checkFlightExpiration === 'function'
-        ? this.catchFlow.checkFlightExpiration(activeKen, {
-            ...trajState,
-            mode: trajState?.mode ?? this.trajectory?.mode,
-            isAirborne: trajState?.isAirborne ?? this.trajectory?.isAirborne,
-            elapsed: trajState?.elapsed ?? this.trajectory?.elapsed,
-            flightDuration: trajState?.flightDuration ?? this.trajectory?.flightDuration,
-          })
-        : null;
+      // (b) Flight expiration miss: if still in 'air' and trajectory ended
+      if (this._pendingAssistedCandidate) {
+        if (isLandingTick) {
+          const cand = this._pendingAssistedCandidate;
+          this._finalizeCatch('assisted', cand.cupKey, cand.ballPos, cand.details, nowSec);
+        }
+      } else {
+        const expirationMiss = typeof this.catchFlow.checkFlightExpiration === 'function'
+          ? this.catchFlow.checkFlightExpiration(activeKen, {
+              ...trajState,
+              mode: trajState?.mode ?? this.trajectory?.mode,
+              isAirborne: trajState?.isAirborne ?? this.trajectory?.isAirborne,
+              elapsed: trajState?.elapsed ?? this.trajectory?.elapsed,
+              flightDuration: trajState?.flightDuration ?? this.trajectory?.flightDuration,
+              targetCupKey: this.activeTargetCup,
+            })
+          : null;
 
-      if (expirationMiss && expirationMiss.type === 'MISS') {
-        this._pendingMissFlightId = expirationMiss.flightId;
+        if (expirationMiss && expirationMiss.type === 'MISS') {
+          this._pendingMissFlightId = expirationMiss.flightId;
+        }
       }
     }
 
     // 5. Emit BALL state every frame
     this.eventBus.emit(Events.BALL, this.getBallState());
+  }
+
+  /**
+   * Finalizes catch confirmation and stages catch score and event.
+   *
+   * @private
+   * @param {'clean' | 'assisted'} catchType
+   * @param {string} cupKey
+   * @param {{ x: number, y: number, z: number }} ballPos
+   * @param {any} details
+   * @param {number} nowSec
+   */
+  _finalizeCatch(catchType, cupKey, ballPos, details, nowSec) {
+    this._pendingAssistedCandidate = null;
+
+    this.catchFlow.onCatchConfirmed(cupKey, ballPos);
+
+    const catchResult = new CatchResult({
+      type: catchType === 'clean' ? CatchType.CLEAN : CatchType.ASSISTED,
+      cupKey,
+      distance: details?.distance ?? 0,
+      relativeSpeed: details?.relativeSpeed ?? 0,
+      alignmentDot: details?.approachDot ?? 0,
+      timestamp: nowSec * 1000,
+    });
+
+    this._pendingCatchResult = {
+      catchResult,
+      flightId: this.trajectory.flightId,
+      timestampMs: nowSec * 1000,
+    };
+
+    this.eventBus.emit(Events.CATCH, catchResult);
   }
 
   /**
@@ -555,6 +658,14 @@ export class GameLoop {
     if (this._pendingMissFlightId !== null) {
       const flightId = this._pendingMissFlightId;
       this._pendingMissFlightId = null;
+      this._pendingAssistedCandidate = null;
+
+      // Ensure ball is reseated consistently with intended target after a miss
+      if (this.catchFlow && this.catchFlow.state === 'seated' && this.activeTargetCup) {
+        if (this.catchFlow.seatCupKey !== this.activeTargetCup) {
+          this.catchFlow.resetSeatCup(this.activeTargetCup, this.gameplayKenGroup);
+        }
+      }
 
       this.scoreEngine.registerMiss();
       this.eventBus.emit(Events.MISS, { flightId, timestamp: nowMs });
@@ -586,6 +697,8 @@ export class GameLoop {
     } else if (typeof window !== 'undefined' && window.__AUDIO_SYSTEM__ && typeof window.__AUDIO_SYSTEM__.unlock === 'function') {
       window.__AUDIO_SYSTEM__.unlock();
     }
+
+    this._pendingAssistedCandidate = null;
 
     const launchPos = this.catchFlow.ballPosition;
     this.trajectory.launch(launchPos);
@@ -650,6 +763,14 @@ export class GameLoop {
   }
 
   /**
+   * Currently staged assisted catch candidate awaiting potential upgrade to clean, if any.
+   * @returns {Object|null}
+   */
+  get pendingAssistedCandidate() {
+    return this._pendingAssistedCandidate;
+  }
+
+  /**
    * Updates WebXR context references used for wrist extraction.
    *
    * @param {Object} [context={}]
@@ -676,6 +797,9 @@ export class GameLoop {
    * Cleans up event listeners registered on the shared EventBus and context references.
    */
   dispose() {
+    this._pendingAssistedCandidate = null;
+    this._pendingCatchResult = null;
+    this._pendingMissFlightId = null;
     if (typeof this._unsubTarget === 'function') {
       this._unsubTarget();
       this._unsubTarget = null;

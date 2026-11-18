@@ -2342,5 +2342,435 @@ describe('GameLoop (Person A)', () => {
         expect(loop.lastAmplifiedPitchDeg).toBeCloseTo(90.0, 2);
       });
     });
+
+    // ==========================================================================
+    // R. Assisted-to-Clean Catch Upgrade Window
+    // ==========================================================================
+    describe('R. Assisted-to-Clean Catch Upgrade Window', () => {
+      it('1. Confirmed assisted catch stages candidate without immediately emitting CATCH or setting catching state', () => {
+        const catchEvents = [];
+        eventBus.on(Events.CATCH, (e) => catchEvents.push(e));
+
+        gameLoop.launchBall();
+        expect(catchFlow.state).toBe('air');
+
+        // Frame 1: Assist confirmed
+        detector.evaluateCatch = () => ({
+          confirmed: true,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'assisted',
+          details: { distance: 0.088, relativeSpeed: 0.8, approachDot: -0.9 },
+        });
+
+        gameLoop.catchDetector.update(0.016, kenGroup);
+
+        // Staged candidate is active
+        expect(gameLoop.pendingAssistedCandidate).not.toBeNull();
+        expect(gameLoop.pendingAssistedCandidate.cupKey).toBe(CupKey.BIG);
+        expect(gameLoop.pendingAssistedCandidate.minDistance).toBeCloseTo(0.088, 3);
+
+        // Still in air mode so subsequent evaluations can continue
+        expect(catchFlow.state).toBe('air');
+        // No CATCH event emitted yet
+        expect(catchEvents.length).toBe(0);
+      });
+
+      it('2. Subsequent valid clean evaluation upgrades staged candidate immediately to CLEAN without requiring confirmed: true', () => {
+        const catchEvents = [];
+        const scoreEvents = [];
+        eventBus.on(Events.CATCH, (e) => catchEvents.push(e));
+        eventBus.on(Events.SCORE, (e) => scoreEvents.push(e));
+
+        gameLoop.launchBall();
+
+        // Tick 1: Assist confirmed (count: 2/2, confirmed: true)
+        detector.evaluateCatch = () => ({
+          confirmed: true,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'assisted',
+          details: { distance: 0.088, relativeSpeed: 0.8, approachDot: -0.9 },
+        });
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        expect(gameLoop.pendingAssistedCandidate).not.toBeNull();
+        expect(catchEvents.length).toBe(0);
+
+        // Tick 2: Closer, enters clean radius. confirmed: false, valid: true, catchType: 'clean'
+        detector.evaluateCatch = () => ({
+          confirmed: false,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'clean',
+          details: { distance: 0.050, relativeSpeed: 0.7, approachDot: -0.95 },
+        });
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+
+        // Upgraded to CLEAN
+        expect(catchEvents.length).toBe(1);
+        expect(catchEvents[0].type).toBe(CatchType.CLEAN);
+        expect(catchFlow.state).toBe('catching');
+        expect(gameLoop.pendingAssistedCandidate).toBeNull();
+
+        // Scored as clean (accuracy 1.4 -> awardedEnergy 32)
+        expect(scoreEvents.length).toBe(1);
+        expect(scoreEvents[0].payload.multipliers.accuracy).toBeCloseTo(1.4, 2);
+        expect(scoreEvents[0].awardedEnergy).toBe(32);
+        expect(scoreManager.currentStreak).toBe(1);
+      });
+
+      it('3. Staged candidate that does not enter clean radius finalizes as ASSISTED upon landing', () => {
+        const catchEvents = [];
+        const scoreEvents = [];
+        const missEvents = [];
+        eventBus.on(Events.CATCH, (e) => catchEvents.push(e));
+        eventBus.on(Events.SCORE, (e) => scoreEvents.push(e));
+        eventBus.on(Events.MISS, (e) => missEvents.push(e));
+
+        gameLoop.launchBall();
+
+        // Run until near landing (~50 frames)
+        for (let i = 0; i < 50; i++) {
+          gameLoop.catchDetector.update(0.016, kenGroup);
+          gameLoop.scoreManager.update(0.016);
+        }
+        expect(catchFlow.state).toBe('air');
+
+        // Tick 51: Assist confirmed
+        detector.evaluateCatch = () => ({
+          confirmed: true,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'assisted',
+          details: { distance: 0.090, relativeSpeed: 0.8, approachDot: -0.9 },
+        });
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        expect(gameLoop.pendingAssistedCandidate).not.toBeNull();
+
+        // Tick 52: Still in assist zone (0.085m), not clean
+        detector.evaluateCatch = () => ({
+          confirmed: false,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'assisted',
+          details: { distance: 0.085, relativeSpeed: 0.8, approachDot: -0.9 },
+        });
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        expect(gameLoop.pendingAssistedCandidate.minDistance).toBeCloseTo(0.085, 3);
+        expect(catchEvents.length).toBe(0);
+
+        // Tick 53 (Landing tick): Trajectory lands.
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+
+        // Must be finalized as ASSISTED, exactly 1 catch, 0 misses
+        expect(catchEvents.length).toBe(1);
+        expect(catchEvents[0].type).toBe(CatchType.ASSISTED);
+        expect(missEvents.length).toBe(0);
+        expect(scoreEvents.length).toBe(1);
+        expect(scoreEvents[0].awardedEnergy).toBe(20);
+        expect(catchFlow.state).toBe('catching');
+      });
+
+      it('4. Staged candidate finalizes as ASSISTED when distance clearly diverges past closest approach', () => {
+        const catchEvents = [];
+        const scoreEvents = [];
+        eventBus.on(Events.CATCH, (e) => catchEvents.push(e));
+        eventBus.on(Events.SCORE, (e) => scoreEvents.push(e));
+
+        gameLoop.launchBall();
+
+        // Tick 1: Assist confirmed at 0.085m
+        detector.evaluateCatch = () => ({
+          confirmed: true,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'assisted',
+          details: { distance: 0.085, relativeSpeed: 0.8, approachDot: -0.9 },
+        });
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        expect(gameLoop.pendingAssistedCandidate).not.toBeNull();
+
+        // Tick 2: Diverging frame 1 (0.092m > 0.085 + 0.005)
+        detector.evaluateCatch = () => ({
+          confirmed: false,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'assisted',
+          details: { distance: 0.092, relativeSpeed: 0.8, approachDot: -0.9 },
+        });
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        expect(gameLoop.pendingAssistedCandidate.divergingCount).toBe(1);
+        expect(catchEvents.length).toBe(0);
+
+        // Tick 3: Diverging frame 2 (0.098m > 0.085 + 0.005) -> triggers ASSISTED finalization
+        detector.evaluateCatch = () => ({
+          confirmed: false,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'assisted',
+          details: { distance: 0.098, relativeSpeed: 0.8, approachDot: -0.9 },
+        });
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+
+        expect(catchEvents.length).toBe(1);
+        expect(catchEvents[0].type).toBe(CatchType.ASSISTED);
+        expect(catchFlow.state).toBe('catching');
+      });
+
+      it('5. Clean evaluation on landing tick takes precedence over landing-based assisted finalization', () => {
+        const catchEvents = [];
+        eventBus.on(Events.CATCH, (e) => catchEvents.push(e));
+
+        gameLoop.launchBall();
+
+        // Suppress detector during launch
+        detector.evaluateCatch = () => ({ confirmed: false, valid: false });
+
+        // Run until frame 50
+        for (let i = 0; i < 50; i++) {
+          gameLoop.catchDetector.update(0.016, kenGroup);
+        }
+
+        // Stage candidate at frame 51
+        detector.evaluateCatch = () => ({
+          confirmed: true,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'assisted',
+          details: { distance: 0.088, relativeSpeed: 0.8, approachDot: -0.9 },
+        });
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        expect(gameLoop.pendingAssistedCandidate).not.toBeNull();
+
+        // Landing tick: evaluated as clean
+        detector.evaluateCatch = () => ({
+          confirmed: false,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'clean',
+          details: { distance: 0.045, relativeSpeed: 0.7, approachDot: -0.95 },
+        });
+        // Advance to landing tick
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.catchDetector.update(0.016, kenGroup);
+
+        // Upgraded to CLEAN on landing tick
+        expect(catchEvents.length).toBe(1);
+        expect(catchEvents[0].type).toBe(CatchType.CLEAN);
+        expect(catchFlow.state).toBe('catching');
+      });
+
+      it('6. Temporary tracking loss preserves staged candidate and allows clean upgrade after recovery', () => {
+        const catchEvents = [];
+        eventBus.on(Events.CATCH, (e) => catchEvents.push(e));
+
+        let trackingValid = true;
+        const mockInput = {
+          update: () => ({
+            position: { x: 0, y: 0, z: 0 },
+            quaternion: { x: 0, y: 0, z: 0, w: 1 },
+            isTrackingValid: trackingValid,
+          }),
+        };
+
+        const loop = new GameLoop({
+          eventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: mockInput,
+          trajectory,
+          catchFlow,
+          detector,
+          scoreManager,
+        });
+
+        loop.inputSystem.update(0.016, null);
+        loop.launchBall();
+
+        // Stage assisted candidate while tracked
+        detector.evaluateCatch = () => ({
+          confirmed: true,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'assisted',
+          details: { distance: 0.088, relativeSpeed: 0.8, approachDot: -0.9 },
+        });
+        loop.catchDetector.update(0.016, kenGroup);
+        expect(loop.pendingAssistedCandidate).not.toBeNull();
+
+        // Tracking lost for 2 ticks
+        trackingValid = false;
+        loop.inputSystem.update(0.016, null);
+        loop.catchDetector.update(0.016, kenGroup);
+        loop.catchDetector.update(0.016, kenGroup);
+
+        // Candidate is NOT discarded during tracking loss
+        expect(loop.pendingAssistedCandidate).not.toBeNull();
+        expect(catchEvents.length).toBe(0);
+
+        // Tracking recovers
+        trackingValid = true;
+        loop.inputSystem.update(0.016, null);
+
+        // Next tick evaluates clean
+        detector.evaluateCatch = () => ({
+          confirmed: false,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'clean',
+          details: { distance: 0.045, relativeSpeed: 0.7, approachDot: -0.95 },
+        });
+        loop.catchDetector.update(0.016, kenGroup);
+
+        expect(catchEvents.length).toBe(1);
+        expect(catchEvents[0].type).toBe(CatchType.CLEAN);
+        expect(catchFlow.state).toBe('catching');
+      });
+
+      it('7. Staged candidate finalizes as ASSISTED if tracking remains lost through landing, avoiding false miss', () => {
+        const catchEvents = [];
+        const missEvents = [];
+        const testEventBus = new EventBus();
+        testEventBus.on(Events.CATCH, (e) => catchEvents.push(e));
+        testEventBus.on(Events.MISS, (e) => missEvents.push(e));
+
+        let trackingValid = true;
+        const mockInput = {
+          update: () => ({
+            position: { x: 0, y: 0, z: 0 },
+            quaternion: { x: 0, y: 0, z: 0, w: 1 },
+            isTrackingValid: trackingValid,
+          }),
+        };
+
+        const testTrajectory = new BallTrajectory();
+        const testCatchFlow = new CatchFlow({ initialCup: CupKey.BIG, kenPose: kenGroup });
+        const testDetector = new KendamaInputAndDetector(kenGroup);
+        const testScoreManager = new ScoreManager({ targetCadenceSeconds: 1.75 });
+
+        const loop = new GameLoop({
+          eventBus: testEventBus,
+          gameplayKenGroup: kenGroup,
+          inputSource: mockInput,
+          trajectory: testTrajectory,
+          catchFlow: testCatchFlow,
+          detector: testDetector,
+          scoreManager: testScoreManager,
+        });
+
+        loop.inputSystem.update(0.016, null);
+        loop.launchBall();
+
+        // Stage assisted candidate while tracking is valid
+        testDetector.evaluateCatch = () => ({
+          confirmed: true,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'assisted',
+          details: { distance: 0.088, relativeSpeed: 0.8, approachDot: -0.9 },
+        });
+        loop.catchDetector.update(0.016, kenGroup);
+        expect(loop.pendingAssistedCandidate).not.toBeNull();
+
+        // Tracking lost
+        trackingValid = false;
+        loop.inputSystem.update(0.016, null);
+
+        // Advance simulation until flight lands while tracking remains lost
+        while (testTrajectory.state.mode === 'air') {
+          loop.inputSystem.update(0.016, null);
+          loop.catchDetector.update(0.016, kenGroup);
+          loop.scoreManager.update(0.016);
+        }
+        // One additional update on landing
+        loop.catchDetector.update(0.016, kenGroup);
+        loop.scoreManager.update(0.016);
+
+        // Advance seating animation lerp
+        loop.catchDetector.update(0.16, kenGroup);
+
+        // Candidate finalized as ASSISTED upon landing; no false MISS emitted
+        expect(catchEvents.length).toBe(1);
+        expect(catchEvents[0].type).toBe(CatchType.ASSISTED);
+        expect(missEvents.length).toBe(0);
+        expect(testCatchFlow.state).toBe('seated');
+      });
+
+      it('8. Candidate state is cleared on new launch', () => {
+        gameLoop.launchBall();
+
+        detector.evaluateCatch = () => ({
+          confirmed: true,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'assisted',
+          details: { distance: 0.088, relativeSpeed: 0.8, approachDot: -0.9 },
+        });
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        expect(gameLoop.pendingAssistedCandidate).not.toBeNull();
+
+        // Frame 2: Clean upgrade completes the catch into catching mode
+        detector.evaluateCatch = () => ({
+          confirmed: false,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'clean',
+          details: { distance: 0.050, relativeSpeed: 0.8, approachDot: -0.9 },
+        });
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        expect(catchFlow.state).toBe('catching');
+
+        // Frame 3: Lerp completes to seated
+        detector.evaluateCatch = () => ({ confirmed: false, valid: false });
+        gameLoop.catchDetector.update(0.16, kenGroup); // Lerp to seated
+        expect(catchFlow.state).toBe('seated');
+
+        // Launching again ensures candidate is null
+        gameLoop.launchBall();
+        expect(gameLoop.pendingAssistedCandidate).toBeNull();
+      });
+
+      it('9. Exactly one CATCH event, one score award, and one catch animation per flight', () => {
+        let catchCount = 0;
+        let scoreCount = 0;
+        eventBus.on(Events.CATCH, () => catchCount++);
+        eventBus.on(Events.SCORE, () => scoreCount++);
+
+        gameLoop.launchBall();
+
+        // Assist confirmed
+        detector.evaluateCatch = () => ({
+          confirmed: true,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'assisted',
+          details: { distance: 0.088, relativeSpeed: 0.8, approachDot: -0.9 },
+        });
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+
+        // Clean upgrade
+        detector.evaluateCatch = () => ({
+          confirmed: false,
+          valid: true,
+          cupKey: CupKey.BIG,
+          catchType: 'clean',
+          details: { distance: 0.050, relativeSpeed: 0.7, approachDot: -0.95 },
+        });
+        gameLoop.catchDetector.update(0.016, kenGroup);
+        gameLoop.scoreManager.update(0.016);
+
+        // Multiple subsequent updates while catching/seated
+        for (let i = 0; i < 10; i++) {
+          gameLoop.catchDetector.update(0.016, kenGroup);
+          gameLoop.scoreManager.update(0.016);
+        }
+
+        expect(catchCount).toBe(1);
+        expect(scoreCount).toBe(1);
+      });
+    });
   });
 });

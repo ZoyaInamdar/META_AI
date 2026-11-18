@@ -170,11 +170,11 @@ function extractVec3(v) {
 export class CatchFlow {
     /**
      * @param {Object} [options={}]
-     * @param {string} [options.initialCup=CUP_IDS.SPIKE] - Cup on which the ball is initially seated
+     * @param {string} [options.initialCup=CUP_IDS.BIG_CUP] - Cup on which the ball is initially seated
      * @param {any} [options.kenPose=null] - Initial Ken pose for computing initial ball position
      */
     constructor(options = {}) {
-        const { initialCup = CUP_IDS.SPIKE, kenPose = null } = options;
+        const { initialCup = CUP_IDS.BIG_CUP, kenPose = null } = options;
 
         this._state = 'seated'; // 'seated' | 'air' | 'catching'
         this._seatCupKey = initialCup;
@@ -273,18 +273,21 @@ export class CatchFlow {
     /**
      * Reports a miss for the active flight if currently in 'air' mode and no miss
      * has been reported yet for this flight.
-     * Transitions state back to 'seated' and resets ball position to the previous seated cup.
+     * Transitions state back to 'seated' and resets ball position to the previous seated cup
+     * or designated target cup.
      *
      * @param {any} [kenPose] - Current Ken pose
+     * @param {string} [targetCupKey=null] - Optional intended target cup to reseat onto
      * @returns {{ type: 'MISS', flightId: any } | null}
      */
-    reportMiss(kenPose) {
+    reportMiss(kenPose, targetCupKey = null) {
         if (this._state !== 'air' || this._missReportedForFlight) {
             return null;
         }
         this._missReportedForFlight = true;
         this._state = 'seated';
-        this._seatCupKey = this._previousSeatCupKey;
+        this._seatCupKey = targetCupKey || this._previousSeatCupKey;
+        this._previousSeatCupKey = this._seatCupKey;
         const seatPoint = computeCupWorldSeatPoint(this._seatCupKey, kenPose);
         this._ballPosition = { ...seatPoint };
         return { type: 'MISS', flightId: this._flightId };
@@ -312,7 +315,8 @@ export class CatchFlow {
         );
 
         if (isFlightEnded) {
-            return this.reportMiss(kenPose);
+            const targetCup = ballOrPosition?.targetCupKey || null;
+            return this.reportMiss(kenPose, targetCup);
         }
 
         return null;
@@ -366,7 +370,8 @@ export class CatchFlow {
             const isBelowMissDepth = this._ballPosition.y < (kenPos.y - MISS_DEPTH);
 
             if (!this._missReportedForFlight && isDescending && isBelowMissDepth) {
-                return this.reportMiss(kenPose);
+                const targetCup = ballOrPosition?.targetCupKey || null;
+                return this.reportMiss(kenPose, targetCup);
             }
 
             // 2. Flight expiration miss detection:
