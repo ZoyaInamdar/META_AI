@@ -1048,7 +1048,7 @@ void main() {
   float targetKintsugi = (uKintsugiGlow > 0.0) ? uKintsugiGlow : 0.85;
   float awakenFactor = smoothstep(0.08, 0.95, awakenProg);
   float effectiveKintsugi = (uVisualStage >= 2.0)
-    ? max(uKintsugiGlow, 0.85)
+    ? ((uKintsugiGlow > 0.0) ? uKintsugiGlow : 0.85)
     : max(uKintsugiGlow, awakenFactor * targetKintsugi);
 
   float celestialEnergy = (uVisualStage >= 5.0)
@@ -1447,7 +1447,7 @@ void main() {
   // Stage 2: Warm amber / champagne atmosphere
   vec3 cAtmoAmber2 = vec3(0.86, 0.68, 0.40);
   // Stage 3: Oceanic blue / cyan atmosphere
-  vec3 cAtmoOcean3 = vec3(0.18, 0.52, 0.76);
+  vec3 cAtmoOcean3 = vec3(0.18, 0.65, 0.95);
   // Stage 4: Blue-green atmospheric influence
   vec3 cAtmoGreen4 = vec3(0.20, 0.62, 0.48);
 
@@ -1488,7 +1488,7 @@ void main() {
   }
 
   // Soft atmospheric alpha: keeps the planet's procedural surface fully visible to the silhouette
-  float alpha = compositeRim * (effectiveAtmo * 0.38 + effectiveShield * 0.24);
+  float alpha = compositeRim * (effectiveAtmo * 0.70 + effectiveShield * 0.24);
   gl_FragColor = vec4(atmoColor, clamp(alpha, 0.0, 1.0));
 }
 `;

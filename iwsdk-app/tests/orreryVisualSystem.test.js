@@ -10,11 +10,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { Group, Scene } from 'three';
-import { Events } from '../src/contracts/Interfaces.js';
+import { Group, Scene, Mesh, PlaneGeometry, MeshBasicMaterial } from 'three';
+import { Events, CupKey, TargetState, CatchType, ScoreEvent } from '../src/contracts/Interfaces.js';
 import { EventBus } from '../src/contracts/EventBus.js';
+import { isPerfectCatch } from '../src/game/isPerfectCatch.js';
+import { TrickSequencer } from '../src/mission/TrickSequencer.js';
 import OrreryState, { ManeuverStatus, OrbitalState } from '../src/game/OrreryState.js';
 import NarrativeDirector, { NarrativeLifecycle, TOTAL_CHAPTERS } from '../src/game/NarrativeDirector.js';
+import { DEBUG_STAGE_PRESETS, PLANETOID_STAGES } from '../src/render/PlanetoidRenderer.js';
 import OrreryVisualSystem, {
   ORRERY_DEFAULT_ANCHOR,
   ORRERY_PALETTE,
@@ -29,7 +32,21 @@ import OrreryVisualSystem, {
   createStellarBodyMaterial,
   createSecondaryPlanetMaterial,
   createResonanceAchievedTextTexture,
-  createResonanceLockedTextTexture
+  createResonanceLockedTextTexture,
+  createStarCoronaMaterial,
+  createCollapsingStarMaterial,
+  createStellarCoronaMaterial,
+  createStellarFragmentMaterial,
+  CH5_STELLAR_FRAGMENT_COUNT,
+  CH5_SUPERNOVA_FILAMENT_COUNT,
+  createMagnetosphericBowGeometry,
+  createMagnetoshieldMaterial,
+  createDirectionalShockwaveArcLineGeometry,
+  createDirectionalShockwaveGeometry,
+  createBinaryResonanceWave,
+  evaluateBinaryResonanceWave,
+  updateBinaryResonanceWave,
+  resetBinaryResonanceWave
 } from '../src/render/OrreryVisualSystem.js';
 
 describe('OrreryVisualSystem (Phase 3)', () => {
@@ -76,6 +93,13 @@ describe('OrreryVisualSystem (Phase 3)', () => {
       expect(orrery.root).toBe(orrery.group);
       expect(orrery.getRoot()).toBe(orrery.group);
       expect(orrery.root.name).toBe('orrery-visual-system');
+
+      // Verify global runtime debug exposure
+      const globalScope = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
+      expect(globalScope).toBeDefined();
+      expect(globalScope.orreryVisualSystem).toBe(orrery);
+      expect(globalScope.__ORRERY_SYSTEM__).toBe(orrery);
+      expect(globalScope.__ORRERY_SYSTEM__ === globalScope.orreryVisualSystem).toBe(true);
     });
 
     it('positions root group at canonical default anchor (0, 2.85, -3.80)', () => {
@@ -163,10 +187,11 @@ describe('OrreryVisualSystem (Phase 3)', () => {
       expect(ch2.getObjectByName('chapter-2-node')).toBeDefined();
     });
 
-    it('creates Chapter 3 components: primary star, flyby body, transfer orbit, outer orbit, node', () => {
+    it('creates Chapter 3 components and keeps the legacy flyby body hidden', () => {
       const ch3 = orrery.getChapterGroup(3);
       expect(ch3.getObjectByName('chapter-3-primary')).toBeDefined();
       expect(ch3.getObjectByName('flyby-body')).toBeDefined();
+      expect(ch3.getObjectByName('flyby-body').visible).toBe(false);
       expect(ch3.getObjectByName('transfer-orbit-path')).toBeDefined();
       expect(ch3.getObjectByName('outer-bound-orbit')).toBeDefined();
       expect(ch3.getObjectByName('chapter-3-node')).toBeDefined();
@@ -182,13 +207,17 @@ describe('OrreryVisualSystem (Phase 3)', () => {
       expect(ch4.getObjectByName('roche-fragments')).toBeDefined();
     });
 
-    it('creates Chapter 5 components: world, atmosphere, collapsing core, shockwave, shield dome', () => {
+    it('creates Chapter 5 components: world, atmosphere, collapsing core, shockwave, shield dome, filaments, inner core, corona, fragments', () => {
       const ch5 = orrery.getChapterGroup(5);
       expect(ch5.getObjectByName('chapter-5-world')).toBeDefined();
       expect(ch5.getObjectByName('chapter-5-atmosphere')).toBeDefined();
       expect(ch5.getObjectByName('collapsing-core')).toBeDefined();
+      expect(ch5.getObjectByName('ch5-stellar-inner-core')).toBeDefined();
+      expect(ch5.getObjectByName('ch5-stellar-corona')).toBeDefined();
+      expect(ch5.getObjectByName('ch5-stellar-fragments')).toBeDefined();
       expect(ch5.getObjectByName('supernova-shockwave')).toBeDefined();
       expect(ch5.getObjectByName('magnetoshield-dome')).toBeDefined();
+      expect(ch5.getObjectByName('ch5-supernova-filaments')).toBeDefined();
     });
   });
 
@@ -1653,28 +1682,56 @@ describe('OrreryVisualSystem (Phase 3)', () => {
       expect(dist).toBeCloseTo(0.38, 2);
     });
 
-    it('STEP 3 — Player Planet Continuity: Chapter 2 planet uses PlanetoidShader at scale 0.18 with uniform synchronization', () => {
+    it('STEP 3 — Player Planet Continuity: Chapter 2 planet uses PlanetoidShader at scale 0.20 with uniform synchronization', () => {
       expect(orrery.ch2PlanetNode).toBeDefined();
       expect(orrery.ch2PlanetNode.name).toBe('chapter-2-node');
-      expect(orrery.ch2PlanetNode.scale.x).toBeCloseTo(0.18, 2);
+      expect(orrery.ch2PlanetNode.scale.x).toBeCloseTo(0.20, 2);
 
       // Shader material with procedural Planetoid uniforms
       const mat = orrery.ch2PlanetNode.material;
       expect(mat.uniforms).toBeDefined();
       expect(mat.uniforms.uVisualStage).toBeDefined();
+      expect(mat.uniforms.uVisualStage.value).toBe(1.0);
+      expect(mat.uniforms.uAwakeningProgress.value).toBe(0.0);
+
+      // The same authoritative progression events used by CelestialEnvironment
+      // update Chapter 2 continuously and settle it onto the completed Stage 2 preset.
+      eventBus.emit(Events.EVOLUTION_PROGRESS, { visualStage: 1.5 });
+      expect(mat.uniforms.uVisualStage.value).toBe(1.5);
+      expect(mat.uniforms.uAwakeningProgress.value).toBe(0.5);
+      eventBus.emit(Events.TRANSFORMATION_COMPLETED, { previousStage: 1, newStage: 2 });
       expect(mat.uniforms.uVisualStage.value).toBe(2.0);
-      expect(mat.uniforms.uAwakeningProgress.value).toBe(1.0);
 
       // Player planet user data
       expect(orrery.ch2PlanetNode.userData.isPlayerPlanet).toBe(true);
       expect(orrery.ch2PlanetNode.userData.stage).toBe(2);
 
-      // setVisualStage drives Chapter 2 planet uniforms in lockstep
-      orrery.setVisualStage(2.5, { awakeningProgress: 1.0, kintsugiGlow: 0.85, oceanFill: 0.40 });
-      expect(orrery.ch2PlanetNode.material.uniforms.uVisualStage.value).toBe(2.5);
-      expect(orrery.ch2PlanetNode.material.uniforms.uKintsugiGlow.value).toBe(0.85);
-      expect(orrery.ch2PlanetNode.material.uniforms.uOceanFill.value).toBe(0.40);
-      expect(orrery.ch1PlanetNode.material.uniforms.uVisualStage.value).toBe(2.5);
+      // The renderer-owned Stage 2 preset is transferred as a complete visual state.
+      orrery.setVisualStage(2.0);
+      const awakening = DEBUG_STAGE_PRESETS[PLANETOID_STAGES.AWAKENING];
+      expect(mat.uniforms.uVisualStage.value).toBe(2.0);
+      expect(mat.uniforms.uAwakeningProgress.value).toBe(1.0);
+      expect(mat.uniforms.uKintsugiGlow.value).toBe(awakening.kintsugiGlow);
+      expect(mat.uniforms.uAtmosphereDensity.value).toBe(awakening.atmosphereDensity);
+      expect(mat.uniforms.uOceanFill.value).toBe(awakening.oceanFill);
+      expect(orrery.ch2PlanetAtmosphereMaterial.uniforms.uAtmosphereDensity.value).toBe(awakening.atmosphereDensity);
+      expect(orrery.ch2PlanetAtmosphere.visible).toBe(true);
+
+      // Fractional progression interpolates the same renderer-owned settings.
+      orrery.setVisualStage(2.25);
+      expect(mat.uniforms.uVisualStage.value).toBe(2.25);
+      expect(mat.uniforms.uKintsugiGlow.value).toBeCloseTo(0.8875, 4);
+      expect(mat.uniforms.uAtmosphereDensity.value).toBeCloseTo(0.25, 4);
+      expect(mat.uniforms.uOceanFill.value).toBeCloseTo(0.2125, 4);
+      expect(orrery.ch1PlanetNode.material.uniforms.uVisualStage.value).toBe(2.25);
+
+      orrery.setVisualStage(3.0);
+      const oceans = DEBUG_STAGE_PRESETS[PLANETOID_STAGES.OCEANS];
+      expect(mat.uniforms.uVisualStage.value).toBe(3.0);
+      expect(mat.uniforms.uKintsugiGlow.value).toBe(oceans.kintsugiGlow);
+      expect(mat.uniforms.uAtmosphereDensity.value).toBe(oceans.atmosphereDensity);
+      expect(mat.uniforms.uOceanFill.value).toBe(oceans.oceanFill);
+      expect(orrery.ch2PlanetAtmosphereMaterial.uniforms.uAtmosphereDensity.value).toBe(oceans.atmosphereDensity);
     });
 
     it('STEP 4 — Chapter 2 Visual Identity: Binary star coronas, inner orbit, and resonant ring', () => {
@@ -1688,9 +1745,9 @@ describe('OrreryVisualSystem (Phase 3)', () => {
       expect(orrery.ch2InnerOrbitLine).toBeDefined();
       expect(orrery.ch2InnerOrbitLine.material.opacity).toBeCloseTo(0.35, 2);
 
-      // Circumbinary resonant ring (radius 1.15, champagne gold)
+      // Compact circumbinary resonant ring (radius 0.76, champagne gold)
       expect(orrery.ch2ResonantRing).toBeDefined();
-      expect(orrery.ch2ResonantRing.material.opacity).toBeCloseTo(0.70, 2);
+      expect(orrery.ch2ResonantRing.material.opacity).toBeCloseTo(0.42, 2);
     });
 
     it('STEP 5 — Smooth 2.0s Transition: both groups active during handoff, Ch 1 hidden at t >= 2.0s', () => {
@@ -1990,15 +2047,15 @@ describe('OrreryVisualSystem (Phase 3)', () => {
       expect(orrery._ch2ParticleData).toBeInstanceOf(Float32Array);
       expect(orrery._ch2ParticleData.length).toBe(400);
 
-      // Verify deterministic data: positions have expected radius corridor ~1.15
+      // Verify deterministic data stays inside the compact circumbinary corridor
       for (let i = 0; i < 100; i++) {
         const x = orrery._ch2ParticleData[i * 4 + 0];
         const y = orrery._ch2ParticleData[i * 4 + 1];
         const z = orrery._ch2ParticleData[i * 4 + 2];
         const phase = orrery._ch2ParticleData[i * 4 + 3];
         const r = Math.sqrt(x * x + z * z);
-        expect(r).toBeGreaterThan(1.0);
-        expect(r).toBeLessThan(1.35);
+        expect(r).toBeGreaterThan(0.65);
+        expect(r).toBeLessThan(0.83);
         expect(Math.abs(y)).toBeLessThan(0.06);
         expect(phase).toBeGreaterThanOrEqual(0.0);
         expect(phase).toBeLessThanOrEqual(Math.PI * 2.0);
@@ -2285,9 +2342,9 @@ describe('OrreryVisualSystem (Phase 3)', () => {
       // Shader uniforms
       expect(ch3Planet.material).toBeDefined();
       expect(ch3Planet.material.uniforms).toBeDefined();
-      expect(ch3Planet.material.uniforms.uVisualStage.value).toBe(3.0);
-      expect(ch3Planet.material.uniforms.uAwakeningProgress.value).toBe(1.0);
-      expect(ch3Planet.material.uniforms.uOceanFill.value).toBe(1.0);
+      expect(ch3Planet.material.uniforms.uVisualStage.value).toBe(1.0);
+      expect(ch3Planet.material.uniforms.uAwakeningProgress.value).toBe(0.0);
+      expect(ch3Planet.material.uniforms.uOceanFill.value).toBe(0.0);
     });
 
     it('synchronizes stage uniforms across Chapter 1, 2, and 3 planet nodes via setVisualStage', () => {
@@ -2307,6 +2364,322 @@ describe('OrreryVisualSystem (Phase 3)', () => {
 
       expect(ch3Planet.material.uniforms.uOceanFill.value).toBe(0.95);
       expect(ch3Planet.material.uniforms.uAtmosphereDensity.value).toBe(0.5);
+    });
+
+    it('keeps Chapter 2 and Chapter 3 shader stages tied to authoritative visual-stage updates', () => {
+      const ch2Planet = orrery.getPlanetNode(2);
+      orrery.setVisualStage(1.0);
+      expect(ch2Planet.material.uniforms.uVisualStage.value).toBe(1.0);
+      expect(ch2Planet.material.uniforms.uAwakeningProgress.value).toBe(0.0);
+      orrery.setVisualStage(1.5);
+      expect(ch2Planet.material.uniforms.uVisualStage.value).toBe(1.5);
+      expect(ch2Planet.material.uniforms.uAwakeningProgress.value).toBe(0.5);
+      orrery.setVisualStage(2.0);
+      expect(ch2Planet.material.uniforms.uVisualStage.value).toBe(2.0);
+      expect(ch2Planet.material.uniforms.uAwakeningProgress.value).toBe(1.0);
+      orrery.setVisualStage(2.25);
+      expect(ch2Planet.material.uniforms.uVisualStage.value).toBe(2.25);
+      orrery.setVisualStage(3.0);
+      expect(ch2Planet.material.uniforms.uVisualStage.value).toBe(3.0);
+      expect(orrery.getPlanetNode(3).material.uniforms.uVisualStage.value).toBe(3.0);
+    });
+
+    it('uses a curved one-star gravity-assist path and settles into the outer orbit', () => {
+      orreryState.setChapter(3);
+      orrery._syncFromDirector();
+      const planet = orrery.getPlanetNode(3);
+      expect(orrery.ch3FlybyWorld.visible).toBe(false);
+
+      orreryState.setOrbitalState(OrbitalState.BINARY_TRANSFER);
+      orrery._syncFromDirector();
+      orrery.update(0.016);
+      const approach = planet.position.clone();
+
+      orreryState.setOrbitalState(OrbitalState.GRAVITY_ASSIST);
+      orrery._syncFromDirector();
+      orrery.update(1.5);
+      const periapsis = planet.position.clone();
+      orrery.update(1.5);
+      const exit = planet.position.clone();
+      expect(periapsis.distanceTo(approach)).toBeGreaterThan(0.1);
+      expect(exit.distanceTo(periapsis)).toBeGreaterThan(0.1);
+      expect(exit.x).toBeGreaterThan(periapsis.x);
+
+      orreryState.setOrbitalState(OrbitalState.BOUND_OUTER_ORBIT);
+      orrery._syncFromDirector();
+      orrery.update(0.016);
+      const initialOuterRadius = Math.hypot(planet.position.x, planet.position.z);
+      expect(initialOuterRadius).toBeGreaterThan(Math.hypot(exit.x, exit.z));
+      expect(initialOuterRadius).toBeLessThan(1.95);
+      orrery.update(1.5);
+      expect(Math.hypot(planet.position.x, planet.position.z)).toBeCloseTo(1.95, 3);
+      expect(orrery.ch3FlybyWorld.visible).toBe(false);
+    });
+
+    it('keeps the player position continuous across transfer, assist, and outer-orbit state changes', () => {
+      orreryState.setChapter(3);
+      orreryState.setCalibrationProgress(1.0);
+      orreryState.setOrbitalState(OrbitalState.BINARY_TRANSFER);
+      orrery._syncFromDirector();
+      orrery.update(0.016);
+      const transferEnd = orrery.ch3PlanetNode.position.clone();
+
+      orreryState.setOrbitalState(OrbitalState.GRAVITY_ASSIST);
+      orrery._syncFromDirector();
+      orrery.update(0.0);
+      expect(orrery.ch3PlanetNode.position.distanceTo(transferEnd)).toBeLessThan(0.00001);
+
+      orrery.update(3.0);
+      const assistExit = orrery.ch3PlanetNode.position.clone();
+      orreryState.setOrbitalState(OrbitalState.BOUND_OUTER_ORBIT);
+      orrery._syncFromDirector();
+      orrery.update(0.0);
+      expect(orrery.ch3PlanetNode.position.distanceTo(assistExit)).toBeLessThan(0.00001);
+      expect(orrery.ch3FlybyWorld.visible).toBe(false);
+
+      orrery.update(0.75);
+      expect(Math.hypot(orrery.ch3PlanetNode.position.x, orrery.ch3PlanetNode.position.z)).toBeGreaterThan(
+        Math.hypot(assistExit.x, assistExit.z)
+      );
+    });
+
+    it('debugChapter3 isolates the three motion states at Stage 3 and restores authoritative state', () => {
+      orrery.setVisualStage(2.5);
+      const actualNarrativeChapter = director.getChapter();
+
+      expect(orrery.debugChapter3('binary_transfer')).toBe(true);
+      let debugState = orrery.getChapter3DebugState();
+      expect(debugState.debugMode).toBe(true);
+      expect(debugState.state).toBe(OrbitalState.BINARY_TRANSFER);
+      expect(debugState.visualStage).toBe(3.0);
+      expect(debugState.primaryStarVisible).toBe(true);
+      expect(debugState.playerPlanetVisible).toBe(true);
+      expect(debugState.flybyBodyVisible).toBe(false);
+      expect(orrery.chapterGroups[1].visible).toBe(false);
+      expect(orrery.chapterGroups[2].visible).toBe(false);
+      expect(orrery.chapterGroups[3].visible).toBe(true);
+      expect(orrery.ch3PlanetNode.material.uniforms.uOceanFill.value).toBe(0.85);
+
+      eventBus.emit(Events.EVOLUTION_PROGRESS, { visualStage: 2.75 });
+      expect(orrery.ch3PlanetNode.material.uniforms.uVisualStage.value).toBe(3.0);
+      expect(orrery.debugChapter3('gravity_assist')).toBe(true);
+      expect(orrery.getChapter3DebugState().state).toBe(OrbitalState.GRAVITY_ASSIST);
+      orrery.update(1.5);
+      expect(orrery.debugChapter3('bound_outer_orbit')).toBe(true);
+      debugState = orrery.getChapter3DebugState();
+      expect(debugState.state).toBe(OrbitalState.BOUND_OUTER_ORBIT);
+      expect(debugState.flybyBodyVisible).toBe(false);
+      expect(director.getChapter()).toBe(actualNarrativeChapter);
+
+      expect(orrery.debugChapter3Reset()).toBe(true);
+      expect(orrery.getVisualStage()).toBe(2.75);
+      expect(orrery.ch3PlanetNode.material.uniforms.uVisualStage.value).toBe(2.75);
+      expect(orrery.chapterGroups[1].visible).toBe(true);
+      expect(orrery.chapterGroups[3].visible).toBe(false);
+      expect(director.getChapter()).toBe(actualNarrativeChapter);
+    });
+
+    it('implements Chapter 3 Visual Enhancements: atmosphere shell, star corona, dynamic lighting, trajectory deflection, and periapsis surge', () => {
+      // 1. Atmosphere shell presence and properties
+      expect(orrery.ch3PlanetAtmosphere).toBeDefined();
+      expect(orrery.ch3PlanetAtmosphere.name).toBe('ch3-planetoid-atmosphere');
+      expect(orrery.ch3PlanetAtmosphere.parent).toBe(orrery.ch3PlanetNode);
+      expect(orrery.ch3PlanetAtmosphereMaterial).toBeDefined();
+
+      // 2. Primary star corona presence and properties
+      expect(orrery.ch3PrimaryGlow).toBeDefined();
+      expect(orrery.ch3PrimaryGlow.name).toBe('primary-star-glow');
+      expect(orrery.ch3PrimaryGlow.parent).toBe(orrery.ch3Primary);
+      expect(orrery.ch3PrimaryGlow.scale.x).toBeCloseTo(1.25, 2);
+      expect(typeof createStarCoronaMaterial).toBe('function');
+
+      // 3. Stage 3 Ocean World Presentation: Atmosphere awakens and Attenuated Kintsugi glow
+      orrery.debugChapter3('binary_transfer');
+      expect(orrery.ch3PlanetAtmosphere.visible).toBe(true);
+      expect(orrery.ch3PlanetNode.material.uniforms.uKintsugiGlow.value).toBe(0.15);
+
+      // 4. Dynamic star-aligned planet lighting: uLightDirection points towards primary star
+      const lightDir = orrery.ch3PlanetNode.material.uniforms.uLightDirection.value;
+      const expectedDir = orrery.ch3Primary.position.clone().sub(orrery.ch3PlanetNode.position).normalize();
+      expect(lightDir.distanceTo(expectedDir)).toBeLessThan(0.001);
+
+      // 5. Redesigned trajectory geometry: deflection angle ~90°–110° and clearance >= 0.08 outside star (0.13)
+      const trajGeom = orrery.ch3TransferLine.geometry;
+      const posAttr = trajGeom.getAttribute('position');
+      let minTrajectoryRadius = 999;
+      for (let i = 0; i < posAttr.count; i++) {
+        const r = Math.hypot(posAttr.getX(i), posAttr.getZ(i));
+        if (r < minTrajectoryRadius) minTrajectoryRadius = r;
+      }
+      expect(minTrajectoryRadius).toBeGreaterThanOrEqual(0.21);
+      const starRadius = 0.13;
+      expect(minTrajectoryRadius - starRadius).toBeGreaterThanOrEqual(0.08);
+
+      // Deflection angle between incoming entry and outgoing exit tangents
+      const pStart = [posAttr.getX(0), posAttr.getZ(0)];
+      const pNext = [posAttr.getX(1), posAttr.getZ(1)];
+      const pPrev = [posAttr.getX(posAttr.count - 2), posAttr.getZ(posAttr.count - 2)];
+      const pEnd = [posAttr.getX(posAttr.count - 1), posAttr.getZ(posAttr.count - 1)];
+      const inAngle = Math.atan2(pNext[1] - pStart[1], pNext[0] - pStart[0]) * 180 / Math.PI;
+      const outAngle = Math.atan2(pEnd[1] - pPrev[1], pEnd[0] - pPrev[0]) * 180 / Math.PI;
+      let defl = Math.abs(outAngle - inAngle);
+      if (defl > 180) defl = 360 - defl;
+      expect(defl).toBeGreaterThanOrEqual(85);
+      expect(defl).toBeLessThanOrEqual(110);
+
+      // 6. Periapsis timing & interaction event: surge occurs at u in [0.35, 0.55] with corona scale and line boost
+      orrery.debugChapter3('gravity_assist');
+      orrery.update(0.0);
+      const baselineLineOpacity = orrery.ch3TransferLine.material.opacity;
+      const baselineCoronaScale = orrery.ch3PrimaryGlow.scale.x;
+
+      // Update to periapsis peak at 1.26s (42% of 3.0s duration)
+      orrery.update(1.26);
+      expect(orrery.ch3PrimaryGlow.scale.x).toBeGreaterThan(baselineCoronaScale * 1.15); // +15% to +25% boost
+      expect(orrery.ch3TransferLine.material.opacity).toBeCloseTo(1.0, 1); // brightens to 1.0
+
+      // Update to outbound leg (t = 2.7s, u = 0.90)
+      orrery.update(1.44);
+      expect(orrery.ch3PrimaryGlow.scale.x).toBeCloseTo(baselineCoronaScale, 2);
+
+      // 7. Outer orbit radius is 1.95 and flyby body is hidden
+      orrery.debugChapter3('bound_outer_orbit');
+      orrery.update(1.5);
+      expect(Math.hypot(orrery.ch3PlanetNode.position.x, orrery.ch3PlanetNode.position.z)).toBeCloseTo(1.95, 2);
+      expect(orrery.ch3FlybyWorld.visible).toBe(false);
+
+      orrery.debugChapter3Reset();
+    });
+
+    it('implements Chapter 3 Slingshot Cinematic Readability Polish: planet scale envelope, primary star dominance, directional planet trail, and trajectory gradient', () => {
+      // 1. Trail geometry and getter presence
+      expect(orrery.ch3PlanetTrailLine).toBeDefined();
+      expect(orrery.ch3PlanetTrailLine.name).toBe('ch3-planet-trail');
+      expect(orrery.ch3PlanetTrailLine.parent).toBe(orrery.chapterGroups[3]);
+      expect(orrery.getCh3PlanetTrail()).toBe(orrery.ch3PlanetTrailLine);
+
+      // 2. Trajectory Approach in BINARY_TRANSFER
+      orrery.debugChapter3('binary_transfer');
+      orrery.update(0.0);
+      expect(orrery.ch3PlanetTrailLine.visible).toBe(true);
+      expect(orrery.getChapter3DebugState().planetTrailVisible).toBe(true);
+      expect(orrery.ch3TransferLine.material.opacity).toBeCloseTo(0.70, 2);
+      expect(orrery.ch3PlanetNode.scale.x).toBeCloseTo(0.18, 2);
+
+      // 3. GRAVITY_ASSIST sequence & Periapsis Event
+      orrery.debugChapter3('gravity_assist');
+      orrery.update(0.0);
+      expect(orrery.ch3PlanetTrailLine.visible).toBe(true);
+
+      // Periapsis peak at 1.26s (u ≈ 0.42)
+      orrery.update(1.26);
+
+      // Planet scale envelope peaks at 1.10x (0.198)
+      expect(orrery.ch3PlanetNode.scale.x).toBeGreaterThan(0.190);
+      expect(orrery.ch3PlanetNode.scale.x).toBeLessThan(0.205);
+      expect(orrery.ch3PlanetNode.scale.x).toBeCloseTo(0.18 * 1.10, 2);
+
+      // Primary star dominance at periapsis
+      expect(orrery.ch3Primary.material.opacity).toBeCloseTo(1.0, 1);
+      expect(orrery.ch3PrimaryGlow.scale.x).toBeCloseTo(1.25 * 1.25, 2); // +25%
+      expect(orrery.ch3PrimaryGlowMaterial.uniforms.uBaseOpacity.value).toBeCloseTo(0.43, 2);
+
+      // Trajectory brightest at periapsis (1.0)
+      expect(orrery.ch3TransferLine.material.opacity).toBeCloseTo(1.0, 1);
+
+      // Ocean World atmosphere rim & density pulse
+      expect(orrery.ch3PlanetAtmosphereMaterial.uniforms.uAtmosphereDensity.value).toBeCloseTo(0.80, 2);
+      expect(orrery.ch3PlanetAtmosphere.scale.x).toBeCloseTo(1.03, 2); // +3%
+      expect(orrery.ch3PlanetMaterial.uniforms.uKintsugiGlow.value).toBe(0.15); // gold fractures remain subtle
+
+      // Directional trail tightly wraps star behind planet (40-vertex thick ribbon mesh)
+      const trailPos = orrery.ch3PlanetTrailGeom.getAttribute('position');
+      expect(trailPos.count).toBe(40);
+      const headMidX = (trailPos.getX(0) + trailPos.getX(1)) * 0.5;
+      const headMidZ = (trailPos.getZ(0) + trailPos.getZ(1)) * 0.5;
+      expect(headMidX).toBeCloseTo(orrery.ch3PlanetNode.position.x, 2);
+      expect(headMidZ).toBeCloseTo(orrery.ch3PlanetNode.position.z, 2);
+      expect(trailPos.getX(38)).toBeLessThan(trailPos.getX(0)); // trails along incoming branch
+
+      // Outbound leg at 2.85s (u ≈ 0.95)
+      orrery.update(1.59);
+      expect(orrery.ch3PlanetNode.scale.x).toBeCloseTo(0.18, 2); // scale returned to baseline
+      expect(orrery.ch3TransferLine.material.opacity).toBeGreaterThanOrEqual(0.65); // outbound visibility retained
+
+      // 4. BOUND_OUTER_ORBIT settle & trail fade
+      orrery.debugChapter3('bound_outer_orbit');
+      orrery.update(0.1);
+      expect(orrery.ch3PlanetTrailLine.visible).toBe(true); // visible during initial settle
+
+      // Settle completes at >1.5s
+      orrery.update(1.6);
+      expect(orrery.ch3PlanetTrailLine.visible).toBe(false); // fully faded and hidden
+      expect(orrery.ch3TransferLine.material.opacity).toBeCloseTo(0.30, 2); // trajectory calms to 0.30
+      expect(orrery.ch3Primary.material.opacity).toBeCloseTo(0.92, 2); // star returns to baseline
+      expect(orrery.ch3PrimaryGlow.scale.x).toBeCloseTo(1.25, 2); // corona returns to baseline
+      expect(orrery.ch3PlanetNode.scale.x).toBeCloseTo(0.18, 2);
+
+      // 5. Reset cleans up debug visuals
+      expect(orrery.debugChapter3Reset()).toBe(true);
+      expect(orrery.ch3PlanetTrailLine.visible).toBe(false);
+    });
+
+    it('implements Chapter 3 Runtime Fix: Stage 3 Ocean World protection, Kintsugi attenuation, ribbon trail, debug replay, and outer orbit handoff', () => {
+      // 1. Stage 3 protection against global evolution clobbering
+      orrery.debugChapter3('gravity_assist');
+      expect(orrery.ch3PlanetNode.material.uniforms.uVisualStage.value).toBe(3.0);
+      expect(orrery.ch3PlanetNode.material.uniforms.uOceanFill.value).toBe(0.85);
+      expect(orrery.ch3PlanetNode.material.uniforms.uKintsugiGlow.value).toBe(0.15);
+      expect(orrery.ch3PlanetAtmosphere.visible).toBe(true);
+
+      // Simulate CelestialEnvironment calling setVisualStage(1.0) every frame
+      orrery.setVisualStage(1.0);
+      expect(orrery.ch3PlanetNode.material.uniforms.uVisualStage.value).toBe(3.0);
+      expect(orrery.ch3PlanetNode.material.uniforms.uOceanFill.value).toBe(0.85);
+      expect(orrery.ch3PlanetNode.material.uniforms.uKintsugiGlow.value).toBe(0.15);
+      expect(orrery.ch3PlanetAtmosphere.visible).toBe(true);
+
+      // 2. Thick Ribbon Motion Trail
+      expect(orrery.ch3PlanetTrailLine.isMesh).toBe(true);
+      expect(orrery.ch3PlanetTrailLine.geometry.isBufferGeometry).toBe(true);
+      const posAttr = orrery.ch3PlanetTrailGeom.getAttribute('position');
+      const colAttr = orrery.ch3PlanetTrailGeom.getAttribute('color');
+      expect(posAttr.count).toBe(40);
+      expect(colAttr.count).toBe(40);
+      expect(orrery.ch3PlanetTrailLine.material.blending).toBe(2); // AdditiveBlending
+
+      // Verify ribbon width > 0
+      orrery.update(0.5);
+      const w = Math.hypot(posAttr.getX(0) - posAttr.getX(1), posAttr.getZ(0) - posAttr.getZ(1));
+      expect(w).toBeGreaterThan(0.04);
+
+      // 3. Debug Replay capability
+      orrery.update(2.0); // Advance well into the assist
+      expect(orrery._ch3AssistElapsed).toBeGreaterThan(2.0);
+      // Re-trigger debugChapter3('gravity_assist') - must restart
+      orrery.debugChapter3('gravity_assist');
+      expect(orrery._ch3AssistElapsed).toBe(0.0);
+      expect(orrery.ch3PlanetNode.position.x).toBeCloseTo(-1.55, 2);
+      expect(orrery.ch3PlanetNode.position.z).toBeCloseTo(-0.90, 2);
+
+      // 4. Auto-handoff into BOUND_OUTER_ORBIT at t >= 3.0s
+      orrery.update(3.0); // Exactly completes assist
+      expect(orrery.ch3PlanetNode.position.x).toBeCloseTo(0.45, 2);
+      expect(orrery.ch3PlanetNode.position.z).toBeCloseTo(1.85, 2);
+
+      // Subsequent frame automatically transitions to outer orbit
+      orrery.update(0.016);
+      expect(orrery.getChapter3DebugState().state).toBe(OrbitalState.BOUND_OUTER_ORBIT);
+      const outerR = Math.hypot(orrery.ch3PlanetNode.position.x, orrery.ch3PlanetNode.position.z);
+      expect(outerR).toBeGreaterThan(1.85);
+
+      // Settles cleanly to R = 1.95
+      orrery.update(1.6);
+      const settledR = Math.hypot(orrery.ch3PlanetNode.position.x, orrery.ch3PlanetNode.position.z);
+      expect(settledR).toBeCloseTo(1.95, 2);
+      expect(orrery.ch3PlanetTrailLine.visible).toBe(false);
+
+      orrery.debugChapter3Reset();
     });
 
     it('executes a smooth 2.0s Chapter 2 -> Chapter 3 visual handoff with position interpolation and element cross-fade', () => {
@@ -2344,7 +2717,7 @@ describe('OrreryVisualSystem (Phase 3)', () => {
 
       // Ch3 elements faded up
       expect(orrery.ch3Primary.material.opacity).toBeGreaterThan(0.0);
-      expect(orrery.ch3FlybyWorld.material.opacity).toBeGreaterThan(0.0);
+      expect(orrery.ch3FlybyWorld.visible).toBe(false);
 
       // Complete transition at t = 2.10s >= 2.0s
       orrery.update(1.10);
@@ -2358,7 +2731,7 @@ describe('OrreryVisualSystem (Phase 3)', () => {
 
       // Baseline Chapter 3 opacities restored
       expect(orrery.ch3Primary.material.opacity).toBeCloseTo(0.92, 2);
-      expect(orrery.ch3FlybyWorld.material.opacity).toBeCloseTo(0.90, 2);
+      expect(orrery.ch3FlybyWorld.visible).toBe(false);
       expect(orrery.ch3TransferLine.material.opacity).toBeCloseTo(0.75, 2);
       expect(orrery.ch3OuterOrbitLine.material.opacity).toBeCloseTo(0.45, 2);
     });
@@ -2601,10 +2974,10 @@ describe('OrreryVisualSystem (Phase 3)', () => {
         if (r > maxRLock) maxRLock = r;
       }
       const lockVariance = maxRLock - minRLock;
-      // All points should now be exactly on the 1.15 circle (variance ~ 0.0)
+      // All points should now be exactly on the compact 0.76 orbit (variance ~ 0.0)
       expect(lockVariance).toBeLessThan(0.001);
-      expect(minRLock).toBeCloseTo(1.15, 2);
-      expect(maxRLock).toBeCloseTo(1.15, 2);
+      expect(minRLock).toBeCloseTo(0.76, 2);
+      expect(maxRLock).toBeCloseTo(0.76, 2);
     });
 
     it('traveling resonant highlights circulate along resonant ring at 2:1 harmonic frequency', () => {
@@ -2631,12 +3004,12 @@ describe('OrreryVisualSystem (Phase 3)', () => {
 
       const r1 = Math.sqrt(p1x * p1x + p1z * p1z);
       const r2 = Math.sqrt(p2x * p2x + p2z * p2z);
-      expect(r1).toBeCloseTo(1.15, 2);
-      expect(r2).toBeCloseTo(1.15, 2);
+      expect(r1).toBeCloseTo(0.76, 2);
+      expect(r2).toBeCloseTo(0.76, 2);
 
-      // Opposite sides of ring (dot product ≈ -1.15^2)
+      // Opposite sides of ring (dot product ≈ -0.76^2)
       const dot = p1x * p2x + p1z * p2z;
-      expect(dot).toBeCloseTo(-(1.15 * 1.15), 1);
+      expect(dot).toBeCloseTo(-(0.76 * 0.76), 1);
     });
 
     it('harmonic nodes pulse in traveling phase wave during stabilization and lock into unison at resonance lock', () => {
@@ -2673,7 +3046,10 @@ describe('OrreryVisualSystem (Phase 3)', () => {
 
       // Normal state without catch surge
       orrery.update(0.016);
-      expect(planetNode.material.uniforms.uKintsugiGlow.value).toBe(0.0);
+      expect(planetNode.material.uniforms.uKintsugiGlow.value).toBeCloseTo(
+        DEBUG_STAGE_PRESETS[PLANETOID_STAGES.AWAKENING].kintsugiGlow,
+        3
+      );
 
       // Trigger catch surge via triggerCatchResponse
       orrery.triggerCatchResponse({ catchType: 'CLEAN', multipliers: { total: 2.0 } });
@@ -2887,6 +3263,56 @@ describe('OrreryVisualSystem (Phase 3)', () => {
       expect(orrery.getCh2EffectiveWobble()).toBe(0.0);
     });
 
+    it('debugChapter2("locked") applies the shared Stage 2 preset without advancing narrative progression', () => {
+      expect(orrery.getVisualStage()).toBe(1.0);
+      expect(orrery.ch1PlanetNode.material.uniforms.uVisualStage.value).toBe(1.0);
+
+      expect(orrery.debugChapter2('locked')).toBe(true);
+
+      const stage2 = DEBUG_STAGE_PRESETS[PLANETOID_STAGES.AWAKENING];
+      const state = orrery.getChapter2DebugState();
+      const uniforms = orrery.ch2PlanetNode.material.uniforms;
+      expect(orrery.chapterGroups[1].visible).toBe(false);
+      expect(orrery.chapterGroups[2].visible).toBe(true);
+      expect(orrery.ch2PlanetNode.visible).toBe(true);
+      expect(uniforms.uVisualStage.value).toBe(2.0);
+      expect(uniforms.uAwakeningProgress.value).toBe(1.0);
+      expect(uniforms.uKintsugiGlow.value).toBe(stage2.kintsugiGlow);
+      expect(uniforms.uOceanFill.value).toBe(stage2.oceanFill);
+      expect(uniforms.uAtmosphereDensity.value).toBe(stage2.atmosphereDensity);
+      expect(orrery.ch2PlanetAtmosphereMaterial.uniforms.uVisualStage.value).toBe(2.0);
+      expect(orrery.ch2PlanetAtmosphereMaterial.uniforms.uAtmosphereDensity.value).toBe(stage2.atmosphereDensity);
+      expect(state.state).toBe(Ch2ResonanceState.RESONANCE_2_1);
+      expect(state.resonanceProgress).toBe(1.0);
+      expect(state.playerPlanetVisible).toBe(true);
+      expect(state.binaryStarsVisible).toBe(true);
+      expect(state.particleFieldVisible).toBe(true);
+      expect(state.harmonicNodesVisible).toBe(true);
+      expect(state.shieldVisible).toBe(true);
+      expect(state.triadBridgeVisible).toBe(true);
+      expect(state.sacredRosetteVisible).toBe(true);
+      expect(state.planetAuraVisible).toBe(true);
+      expect(state.resonanceLockedVisible).toBe(true);
+      expect(director.getChapter()).toBe(1);
+
+      orrery.debugChapter2Reset();
+      expect(orrery.getVisualStage()).toBe(1.0);
+      expect(orrery.ch1PlanetNode.material.uniforms.uVisualStage.value).toBe(1.0);
+      expect(orrery.ch2PlanetNode.material.uniforms.uVisualStage.value).toBe(1.0);
+    });
+
+    it('keeps Chapter 2 debug display on Stage 2 while retaining the latest authoritative stage for reset', () => {
+      orrery.debugChapter2('chaotic');
+      eventBus.emit(Events.EVOLUTION_PROGRESS, { visualStage: 1.5 });
+
+      expect(orrery.ch2PlanetNode.material.uniforms.uVisualStage.value).toBe(2.0);
+
+      orrery.debugChapter2Reset();
+      expect(orrery.getVisualStage()).toBe(1.5);
+      expect(orrery.ch1PlanetNode.material.uniforms.uVisualStage.value).toBe(1.5);
+      expect(orrery.ch2PlanetNode.material.uniforms.uVisualStage.value).toBe(1.5);
+    });
+
     it('debug states do NOT emit ORRERY_RESONANCE_COMPLETED', () => {
       let emitted = false;
       eventBus.on(Events.ORRERY_RESONANCE_COMPLETED, () => {
@@ -3003,6 +3429,33 @@ describe('OrreryVisualSystem (Phase 3)', () => {
   });
 
   describe('21. Chapter 2 Three-Body Composition & Mystical Readability Correction', () => {
+    it('keeps the Stage 2 planet in a compact triangular circumbinary composition', () => {
+      advanceToChapter2();
+      expect(orrery.ch2PlanetNode.scale.x).toBeCloseTo(0.20, 2);
+      orrery.debugChapter2('locked');
+      const planet = orrery.ch2PlanetNode;
+      expect(Math.hypot(planet.position.x, planet.position.z)).toBeCloseTo(0.76, 2);
+      expect(planet.scale.x).toBeCloseTo(0.216, 2);
+      expect(planet.position.distanceTo(orrery.ch2Star1.position)).toBeGreaterThan(0.50);
+      expect(planet.position.distanceTo(orrery.ch2Star2.position)).toBeGreaterThan(0.50);
+
+      const outerRing = orrery.ch2ConcentricRing3.geometry.attributes.position.array;
+      let outerRadius = 0;
+      for (let i = 0; i < outerRing.length; i += 3) {
+        outerRadius = Math.max(outerRadius, Math.hypot(outerRing[i], outerRing[i + 2]));
+      }
+      expect(outerRadius).toBeCloseTo(0.96, 2);
+      expect(orrery.getCh2ParticleCount()).toBe(100);
+      const particleMatrices = orrery.ch2ParticleField.instanceMatrix.array;
+      for (let i = 0; i < 100; i++) {
+        const x = particleMatrices[i * 16 + 12];
+        const z = particleMatrices[i * 16 + 14];
+        const radius = Math.hypot(x, z);
+        expect(radius).toBeGreaterThan(0.35);
+        expect(radius).toBeLessThan(0.92);
+      }
+    });
+
     function advanceToChapter2() {
       eventBus.emit(Events.EVOLUTION_PROGRESS, { currentStage: 1, progress: 1.0 });
       eventBus.emit(Events.STAGE_READY, { currentStage: 1, targetStage: 2 });
@@ -3034,11 +3487,18 @@ describe('OrreryVisualSystem (Phase 3)', () => {
       orrery.update(0.016);
       expect(mockPlanetoid.group.visible).toBe(false);
 
-      // If standalone planetoid is in explicit debug mode, suppression respects it
+      // A lingering standalone debug-stage override cannot compete during Chapter 2.
       mockPlanetoid.isDebugMode = () => true;
       mockPlanetoid.group.visible = true;
       orrery.update(0.016);
+      expect(mockPlanetoid.group.visible).toBe(false);
+
+      // The dedicated showcase remains an explicit visibility override.
+      mockPlanetoid.isShowcaseMode = () => true;
+      mockPlanetoid.group.visible = true;
+      orrery.update(0.016);
       expect(mockPlanetoid.group.visible).toBe(true);
+      expect(orrery.ch2PlanetNode.visible).toBe(true);
     });
 
     it('creates and animates Chapter 2 Three-Body Triad Energy Bridge (Star 1 <-> Planet <-> Star 2)', () => {
@@ -3407,6 +3867,1129 @@ describe('OrreryVisualSystem (Phase 3)', () => {
       expect(ch1Text).toBeDefined();
       expect(ch1Text.scale.x).toBeCloseTo(0.88, 2);
       expect(ch1Text.scale.y).toBeCloseTo(0.22, 2);
+    });
+  });
+
+  describe('24. Chapter 4: Roche Disruption & Ring Formation Visual System', () => {
+    function advanceToChapter4() {
+      orreryState.advanceChapter(2);
+      orreryState.advanceChapter(3);
+      orreryState.advanceChapter(4);
+      orrery._syncFromDirector();
+    }
+
+    it('creates Chapter 4 Stage 4 Living Green World host planet with dedicated atmosphere', () => {
+      const ch4 = orrery.getChapterGroup(4);
+      expect(ch4).toBeDefined();
+      expect(orrery.ch4PlanetNode).toBeDefined();
+      expect(orrery.ch4PlanetNode.name).toBe('host-planet');
+      expect(orrery.ch4HostPlanet).toBe(orrery.ch4PlanetNode);
+
+      // Verify protagonist scale (~0.324) for prominent celestial presence
+      expect(orrery.ch4PlanetNode.scale.x).toBeCloseTo(0.324, 2);
+      expect(orrery.ch4PlanetNode.scale.y).toBeCloseTo(0.324, 2);
+      expect(orrery.ch4PlanetNode.scale.z).toBeCloseTo(0.324, 2);
+
+      // Verify Stage 4 Living Green World core uniforms
+      const u = orrery.ch4PlanetNode.material.uniforms;
+      expect(u.uVisualStage.value).toBe(4.0);
+      expect(u.uOceanFill.value).toBeCloseTo(0.95, 2);
+      expect(u.uAtmosphereDensity.value).toBeCloseTo(0.90, 2);
+      expect(u.uKintsugiGlow.value).toBeCloseTo(0.85, 2);
+
+      // Verify dedicated atmosphere child mesh
+      expect(orrery.ch4PlanetAtmosphere).toBeDefined();
+      expect(orrery.ch4PlanetAtmosphere.name).toBe('ch4-planet-atmosphere');
+      const atmoU = orrery.ch4PlanetAtmosphere.material.uniforms;
+      expect(atmoU.uVisualStage.value).toBe(4.0);
+      expect(atmoU.uAtmosphereDensity.value).toBeCloseTo(0.90, 2);
+    });
+
+    it('orients Chapter 4 ring discs, fragments, and Roche limit marker broadside to player camera', () => {
+      // Ring discs and fragments lie broadside in the XY plane (rotation.x == 0)
+      expect(orrery.ch4InnerRing.rotation.x).toBe(0.0);
+      expect(orrery.ch4OuterRing.rotation.x).toBe(0.0);
+      expect(orrery.ch4Fragments.rotation.x).toBe(0.0);
+      // Roche limit loop rotated to lie in the same broadside XY plane
+      expect(orrery.ch4RocheLimitLine.rotation.x).toBeCloseTo(Math.PI * 0.5, 2);
+    });
+
+    it('protects Chapter 4 Stage 4 planet from setVisualStage(1.0) clobbering', () => {
+      advanceToChapter4();
+      expect(orrery.activeChapter).toBe(4);
+
+      // Attempt to overwrite stage with Stage 1
+      orrery.setVisualStage(1.0);
+
+      // Chapter 4 planet must preserve Stage 4 uniforms
+      const u = orrery.ch4PlanetNode.material.uniforms;
+      expect(u.uVisualStage.value).toBe(4.0);
+      expect(u.uOceanFill.value).toBeCloseTo(0.95, 2);
+      expect(u.uAtmosphereDensity.value).toBeCloseTo(0.90, 2);
+      expect(orrery.ch4PlanetAtmosphere.visible).toBe(true);
+    });
+
+    it('returns the Stage 4 Living Green World node for getPlanetNode(4) and getActivePlanetoidNode()', () => {
+      expect(orrery.getPlanetNode(4)).toBe(orrery.ch4PlanetNode);
+      advanceToChapter4();
+      expect(orrery.getActivePlanetoidNode()).toBe(orrery.ch4PlanetNode);
+    });
+
+    it('creates 6 irregular orbiting asteroids in outer orbits with varied radii and inclinations', () => {
+      expect(orrery.ch4Asteroids).toHaveLength(6);
+      expect(orrery.ch4AsteroidGroup.children).toHaveLength(6);
+      expect(orrery.ch4Satellite).toBe(orrery.ch4Asteroids[0].mesh);
+      expect(orrery.ch4Asteroids[0].mesh.name).toBe('approaching-satellite');
+
+      const expectedRadii = [1.15, 1.25, 1.35, 1.45, 1.55, 1.65];
+      for (let i = 0; i < 6; i++) {
+        expect(orrery.ch4Asteroids[i].baseRadius).toBeCloseTo(expectedRadii[i], 2);
+        expect(orrery.ch4Asteroids[i].state).toBe('orbiting');
+      }
+
+      // Verify orbital motion advances positions
+      advanceToChapter4();
+      const pos0 = orrery.ch4Asteroids[1].mesh.position.clone();
+      orrery.update(0.1);
+      const pos1 = orrery.ch4Asteroids[1].mesh.position;
+      expect(pos0.distanceTo(pos1)).toBeGreaterThan(0.005);
+    });
+
+    it('round-robin selects orbiting asteroids upon canonical Perfect Kendama score events (CLEAN)', () => {
+      advanceToChapter4();
+      expect(orrery.ch4Asteroids[0].state).toBe('orbiting');
+      expect(orrery.ch4Asteroids[1].state).toBe('orbiting');
+
+      // First canonical Perfect catch (catchType === 'CLEAN') triggers asteroid 0
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'flight_clean_1',
+          catchType: 'CLEAN',
+          baseEnergy: 20,
+          multipliers: { accuracy: 1.4, cadence: 1.0, streak: 1.15, total: 1.61 },
+          awardedEnergy: 32
+        },
+        awardedEnergy: 32
+      });
+      expect(orrery.ch4Asteroids[0].state).toBe('approaching');
+      expect(orrery.ch4Asteroids[1].state).toBe('orbiting');
+
+      // Duplicate eventId is ignored and does NOT trigger a second asteroid
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'flight_clean_1',
+          catchType: 'CLEAN',
+          awardedEnergy: 32
+        },
+        awardedEnergy: 32
+      });
+      expect(orrery.ch4Asteroids[1].state).toBe('orbiting');
+
+      // Second canonical Perfect catch with new eventId triggers asteroid 1 round-robin
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'flight_clean_2',
+          catchType: 'CLEAN',
+          awardedEnergy: 20
+        },
+        awardedEnergy: 20
+      });
+      expect(orrery.ch4Asteroids[1].state).toBe('approaching');
+    });
+
+    it('does not trigger Roche disruption on ASSISTED, MISS, or NONE catches', () => {
+      advanceToChapter4();
+      expect(orrery.ch4Asteroids[0].state).toBe('orbiting');
+
+      // ASSISTED catch must NOT trigger
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'flight_assisted_1',
+          catchType: 'ASSISTED'
+        }
+      });
+      expect(orrery.ch4Asteroids[0].state).toBe('orbiting');
+
+      // MISS catch must NOT trigger
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'flight_miss_1',
+          catchType: 'MISS'
+        }
+      });
+      expect(orrery.ch4Asteroids[0].state).toBe('orbiting');
+
+      // NONE catch must NOT trigger
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'flight_none_1',
+          catchType: 'NONE'
+        }
+      });
+      expect(orrery.ch4Asteroids[0].state).toBe('orbiting');
+
+      // Legacy string 'PERFECT' without CLEAN must NOT trigger under canonical contract
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'flight_legacy_perf_1',
+          catchType: 'PERFECT'
+        }
+      });
+      expect(orrery.ch4Asteroids[0].state).toBe('orbiting');
+    });
+
+    it('triggers CLEAN catches regardless of cadence, multiplier, or energy thresholds', () => {
+      advanceToChapter4();
+      expect(orrery.ch4Asteroids[0].state).toBe('orbiting');
+
+      // CLEAN catch with baseline cadence (1.0), low multiplier (< 1.75), low energy (< 35)
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'flight_clean_low_mult',
+          catchType: 'CLEAN',
+          multipliers: { cadence: 1.0, total: 1.0 },
+          awardedEnergy: 10
+        },
+        awardedEnergy: 10
+      });
+      expect(orrery.ch4Asteroids[0].state).toBe('approaching');
+    });
+
+    it('deforms asteroid prolate elongation along radial direction near Roche limit', () => {
+      advanceToChapter4();
+      orrery.debugChapter4('roche_shepherding');
+
+      const a0 = orrery.ch4Asteroids[0];
+      expect(a0.state).toBe('shepherding');
+      // Prolate elongation: stretch along radial X, squeeze along transverse
+      expect(a0.mesh.scale.x).toBeGreaterThan(1.2);
+      expect(a0.mesh.scale.y).toBeLessThan(0.9);
+      expect(a0.mesh.scale.z).toBeLessThan(0.9);
+    });
+
+    it('disruption activates debris fragments and enriches luminous rings', () => {
+      advanceToChapter4();
+      orrery.debugChapter4('ring_formed');
+
+      expect(orrery.ch4InnerRing.material.opacity).toBeCloseTo(0.85, 2);
+      expect(orrery.ch4OuterRing.material.opacity).toBeCloseTo(0.75, 2);
+      expect(orrery.ch4Fragments.visible).toBe(true);
+      expect(orrery.ch4Fragments.material.opacity).toBeCloseTo(0.85, 2);
+    });
+
+    it('rotates ring discs continuously during update', () => {
+      advanceToChapter4();
+      const rot0 = orrery.ch4InnerRing.rotation.z;
+      orrery.update(0.2);
+      expect(orrery.ch4InnerRing.rotation.z).toBeGreaterThan(rot0);
+    });
+
+    it('debugChapter4 APIs support state inspection, reset, and return accurate snapshots', () => {
+      expect(orrery.debugChapter4('satellite_approach')).toBe(true);
+      let snap = orrery.getChapter4DebugState();
+      expect(snap.debugMode).toBe(true);
+      expect(snap.state).toBe(OrbitalState.SATELLITE_APPROACH);
+      expect(snap.visualStage).toBe(4.0);
+      expect(snap.hostPlanetVisible).toBe(true);
+      expect(snap.asteroidCount).toBe(6);
+
+      expect(orrery.debugChapter4('roche_shepherding')).toBe(true);
+      expect(orrery.getChapter4DebugState().state).toBe(OrbitalState.ROCHE_SHEPHERDING);
+
+      expect(orrery.debugChapter4('ring_formed')).toBe(true);
+      expect(orrery.getChapter4DebugState().state).toBe(OrbitalState.RING_FORMED);
+
+      // Rejects invalid state
+      expect(orrery.debugChapter4('invalid_state_xyz')).toBe(false);
+
+      // Reset
+      expect(orrery.debugChapter4Reset()).toBe(true);
+      snap = orrery.getChapter4DebugState();
+      expect(snap.debugMode).toBe(false);
+    });
+
+    it('handles Chapter 3 to Chapter 4 visual transition smoothly', () => {
+      orreryState.advanceChapter(2);
+      orreryState.advanceChapter(3);
+      orrery._syncFromDirector();
+
+      expect(orrery.startChapterTransition(3, 4)).toBe(true);
+      expect(orrery.isChapterTransitionActive()).toBe(true);
+      expect(orrery.getChapterGroup(3).visible).toBe(true);
+      expect(orrery.getChapterGroup(4).visible).toBe(true);
+
+      // Complete transition (duration 2.0s)
+      orrery.update(2.1);
+      expect(orrery.isChapterTransitionActive()).toBe(false);
+      expect(orrery.getChapterGroup(3).visible).toBe(false);
+      expect(orrery.getChapterGroup(4).visible).toBe(true);
+      expect(orrery.ch4PlanetNode.visible).toBe(true);
+      expect(orrery.ch4PlanetNode.position.x).toBeCloseTo(0.0, 2);
+    });
+
+    it('ensures Chapter 1, 2, and 3 visuals and debug states remain intact without regression', () => {
+      // Chapter 1 check
+      expect(orrery.ch1PlanetNode).toBeDefined();
+      expect(orrery.ch1PrimaryStar).toBeDefined();
+
+      // Chapter 2 debug check
+      expect(orrery.debugChapter2('locked')).toBe(true);
+      expect(orrery.isResonanceLocked()).toBe(true);
+      expect(orrery.debugChapter2Reset()).toBe(true);
+
+      // Chapter 3 debug check
+      expect(orrery.debugChapter3('gravity_assist')).toBe(true);
+      const ch3Snap = orrery.getChapter3DebugState();
+      expect(ch3Snap.debugMode).toBe(true);
+      expect(ch3Snap.visualStage).toBe(3.0);
+      expect(orrery.debugChapter3Reset()).toBe(true);
+    });
+  });
+
+  describe('25. Chapter 5: Supernova Deflection Visual System', () => {
+    function advanceToChapter5() {
+      orreryState.advanceChapter(2);
+      orreryState.advanceChapter(3);
+      orreryState.advanceChapter(4);
+      orreryState.advanceChapter(5);
+      orrery._syncFromDirector();
+    }
+
+    it('creates custom collapsing star material with domain-warped lava crack uniforms', () => {
+      const mat = createCollapsingStarMaterial();
+      expect(mat).toBeDefined();
+      expect(mat.uniforms.uLavaIntensity).toBeDefined();
+      expect(mat.uniforms.uCrackScale).toBeDefined();
+      expect(mat.uniforms.uInstability).toBeDefined();
+      expect(mat.uniforms.uFlashPulse).toBeDefined();
+      expect(mat.uniforms.uCrustColor).toBeDefined();
+      expect(mat.uniforms.uLavaColorDeep).toBeDefined();
+      expect(mat.uniforms.uLavaColorBright).toBeDefined();
+      expect(mat.uniforms.uFlashColor).toBeDefined();
+      expect(mat.vertexShader).toContain('vDomainPos');
+      expect(mat.fragmentShader).toContain('domainWarp');
+      mat.dispose();
+    });
+
+    it('creates distant collapsing star with correct name, initial position, scale, and custom shader', () => {
+      const ch5 = orrery.getChapterGroup(5);
+      expect(ch5).toBeDefined();
+      expect(orrery.ch5StellarCore).toBeDefined();
+      expect(orrery.ch5StellarCore.name).toBe('collapsing-core');
+
+      // Initial position (-1.35, 0.55, 0.0)
+      expect(orrery.ch5StellarCore.position.x).toBeCloseTo(-1.35, 2);
+      expect(orrery.ch5StellarCore.position.y).toBeCloseTo(0.55, 2);
+      expect(orrery.ch5StellarCore.position.z).toBeCloseTo(0.0, 2);
+
+      // Initial scale 0.18 (approx 40% of planet diameter)
+      expect(orrery.ch5StellarCore.scale.x).toBeCloseTo(0.18, 2);
+      expect(orrery.ch5StellarCore.scale.y).toBeCloseTo(0.18, 2);
+      expect(orrery.ch5StellarCore.scale.z).toBeCloseTo(0.18, 2);
+
+      // Custom collapsing star shader material and uniforms
+      const mat = orrery.ch5StellarCore.material;
+      expect(mat).toBeDefined();
+      expect(mat.uniforms.uLavaIntensity).toBeDefined();
+      expect(mat.uniforms.uCrackScale).toBeDefined();
+      expect(mat.uniforms.uInstability).toBeDefined();
+      expect(mat.uniforms.uFlashPulse).toBeDefined();
+    });
+
+    it('cycles star visual states: SUPERNOVA_THREAT, STAR_AGITATED, STAR_COLLAPSE, and Remnant', () => {
+      // 1. SUPERNOVA_THREAT: low activity
+      orrery.debugChapter5('supernova_threat');
+      expect(orrery.ch5StellarCore.material.uniforms.uLavaIntensity.value).toBeCloseTo(0.30, 2);
+      expect(orrery.ch5StellarCore.material.uniforms.uInstability.value).toBeCloseTo(0.0, 2);
+      expect(orrery.ch5StellarCore.scale.x).toBeCloseTo(0.18, 2);
+
+      // 2. STAR_AGITATED: increased crack activity
+      orrery.debugChapter5('star_agitated');
+      expect(orrery.ch5StellarCore.material.uniforms.uInstability.value).toBeGreaterThan(0.5);
+      expect(orrery.ch5StellarCore.material.uniforms.uLavaIntensity.value).toBeGreaterThan(0.5);
+
+      // 3. STAR_COLLAPSE: reduces scale and reaches peak flash
+      orrery.debugChapter5('star_collapse');
+      expect(orrery.ch5StellarCore.material.uniforms.uFlashPulse.value).toBeGreaterThan(0.8);
+      expect(orrery.ch5StellarCore.scale.x).toBeLessThan(0.18);
+
+      // 4. Remnant state: reduced scale (~0.055)
+      orrery.debugChapter5('atmosphere_protected');
+      expect(orrery.ch5StellarCore.scale.x).toBeCloseTo(0.055, 2);
+    });
+
+    it('creates Stage 5 protagonist planet with scale 0.45, Stage 5 uniforms, and responding deflector', () => {
+      expect(orrery.ch5PlanetNode).toBeDefined();
+      expect(orrery.ch5PlanetNode.name).toBe('chapter-5-world');
+      expect(orrery.ch5ProtectedPlanet).toBe(orrery.ch5PlanetNode);
+
+      // Base scale 0.45 (Dominant Hero occupying 25-35% of composition)
+      expect(orrery.ch5PlanetNode.scale.x).toBeCloseTo(0.45, 2);
+      expect(orrery.ch5PlanetNode.scale.y).toBeCloseTo(0.45, 2);
+      expect(orrery.ch5PlanetNode.scale.z).toBeCloseTo(0.45, 2);
+      expect(orrery.ch5PlanetNode.position.x).toBeCloseTo(0.18, 2);
+      expect(orrery.ch5PlanetNode.position.y).toBeCloseTo(-0.05, 2);
+
+      // Stage 5 uniforms
+      const u = orrery.ch5PlanetNode.material.uniforms;
+      expect(u.uVisualStage.value).toBe(5.0);
+      expect(u.uGoldIgnited.value).toBe(1.0);
+      expect(u.uShieldCharge).toBeDefined();
+
+      // Dedicated atmosphere and inherited rings
+      expect(orrery.ch5Atmosphere).toBeDefined();
+      expect(orrery.ch5Atmosphere.name).toBe('chapter-5-atmosphere');
+      expect(orrery.ch5InnerRing).toBeDefined();
+      expect(orrery.ch5OuterRing).toBeDefined();
+
+      // Deflector shield uniform responds to state
+      orrery.debugChapter5('supernova_threat');
+      expect(u.uShieldCharge.value).toBeCloseTo(0.0, 2);
+
+      orrery.debugChapter5('supernova_deflection');
+      expect(u.uShieldCharge.value).toBeCloseTo(1.0, 2);
+      expect(orrery.ch5Magnetoshield.visible).toBe(true);
+      expect(orrery.ch5Magnetoshield.material.opacity).toBeGreaterThan(0.5);
+    });
+
+    it('handles Chapter 4 to Chapter 5 visual transition smoothly', () => {
+      orreryState.advanceChapter(2);
+      orreryState.advanceChapter(3);
+      orreryState.advanceChapter(4);
+      orrery._syncFromDirector();
+
+      expect(orrery.startChapterTransition(4, 5)).toBe(true);
+      expect(orrery.isChapterTransitionActive()).toBe(true);
+      expect(orrery.getChapterGroup(4).visible).toBe(true);
+      expect(orrery.getChapterGroup(5).visible).toBe(true);
+
+      // Complete transition (duration 2.0s)
+      orrery.update(2.1);
+      expect(orrery.isChapterTransitionActive()).toBe(false);
+      expect(orrery.getChapterGroup(4).visible).toBe(false);
+      expect(orrery.getChapterGroup(5).visible).toBe(true);
+      expect(orrery.ch5PlanetNode.visible).toBe(true);
+      expect(orrery.ch5StellarCore.visible).toBe(true);
+    });
+
+    it('triggers supernova deflection on canonical SCORE event (catchType: CLEAN, target: SPIKE) and guards duplicate eventId', () => {
+      advanceToChapter5();
+      expect(orrery.ch5Magnetoshield.visible).toBe(false);
+
+      // 1. Supporting CATCH event arrives first (does NOT trigger cinematic on its own)
+      eventBus.emit(Events.CATCH, {
+        id: 'catch_spike_1',
+        type: 'CLEAN',
+        cupKey: 'spike'
+      });
+      expect(orrery._ch5CleanSpikeTriggered).toBe(false);
+      expect(orrery._ch5Phase).toBe('SUPERNOVA_THREAT');
+
+      // 2. Matching SCORE event arrives with CLEAN catch confirming Perfect catch
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'score_spike_clean_1',
+          catchType: 'CLEAN'
+        }
+      });
+
+      expect(orrery._ch5Phase).toBe('SUPERNOVA_DEFLECTION');
+      expect(orrery._ch5CleanSpikeTriggered).toBe(true);
+      expect(orrery.ch5Magnetoshield.visible).toBe(true);
+
+      // 3. Duplicate SCORE event with same eventId is guarded and ignored
+      const prevDeflectorProgress = orrery._ch5DeflectorProgress;
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'score_spike_clean_1',
+          catchType: 'CLEAN'
+        }
+      });
+      expect(orrery._ch5DeflectorProgress).toBe(prevDeflectorProgress);
+    });
+
+    it('enforces all negative gating conditions for Chapter 5 trigger contract', () => {
+      advanceToChapter5();
+      orrery.debugChapter5Reset();
+      expect(orrery._ch5CleanSpikeTriggered).toBe(false);
+
+      // Negative Case 0: CLEAN SCORE without any target information -> fails closed (no trigger)
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'score_no_target_info',
+          catchType: 'CLEAN'
+        }
+      });
+      expect(orrery._ch5CleanSpikeTriggered).toBe(false);
+      expect(orrery._ch5Phase).toBe('SUPERNOVA_THREAT');
+
+      // Negative Case 1: CATCH without SCORE -> no trigger
+      eventBus.emit(Events.CATCH, {
+        id: 'catch_only_1',
+        type: 'CLEAN',
+        cupKey: 'spike'
+      });
+      expect(orrery._ch5CleanSpikeTriggered).toBe(false);
+      expect(orrery._ch5Phase).toBe('SUPERNOVA_THREAT');
+
+      // Negative Case 2: SCORE + ASSISTED -> no trigger
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'score_assisted_1',
+          catchType: 'ASSISTED',
+          cupKey: 'spike'
+        }
+      });
+      expect(orrery._ch5CleanSpikeTriggered).toBe(false);
+      expect(orrery._ch5Phase).toBe('SUPERNOVA_THREAT');
+
+      // Negative Case 3: SCORE + MISS -> no trigger
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'score_miss_1',
+          catchType: 'MISS',
+          cupKey: 'spike'
+        }
+      });
+      expect(orrery._ch5CleanSpikeTriggered).toBe(false);
+      expect(orrery._ch5Phase).toBe('SUPERNOVA_THREAT');
+
+      // Negative Case 4a: SCORE + CLEAN with explicit non-spike cupKey -> no trigger
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'score_clean_big_1',
+          catchType: 'CLEAN',
+          cupKey: 'big'
+        }
+      });
+      expect(orrery._ch5CleanSpikeTriggered).toBe(false);
+      expect(orrery._ch5Phase).toBe('SUPERNOVA_THREAT');
+
+      // Negative Case 4b: SCORE + CLEAN when active target is set to non-spike -> no trigger
+      eventBus.emit(Events.TARGET, new TargetState(CupKey.BIG, 'single', 1));
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'score_clean_target_mismatch',
+          catchType: 'CLEAN'
+        }
+      });
+      expect(orrery._ch5CleanSpikeTriggered).toBe(false);
+      expect(orrery._ch5Phase).toBe('SUPERNOVA_THREAT');
+
+      // Negative Case 4c: Reset target to SPIKE and verify CLEAN triggers
+      eventBus.emit(Events.TARGET, new TargetState(CupKey.SPIKE, 'spike', 2));
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'score_clean_valid_spike',
+          catchType: 'CLEAN'
+        }
+      });
+      expect(orrery._ch5CleanSpikeTriggered).toBe(true);
+      expect(orrery._ch5Phase).toBe('SUPERNOVA_DEFLECTION');
+    });
+
+    it('does NOT trigger Chapter 5 cinematic on CLEAN catches during Chapter 4 or earlier', () => {
+      // Set to Chapter 4
+      orreryState.advanceChapter(2);
+      orreryState.advanceChapter(3);
+      orreryState.advanceChapter(4);
+      orrery._syncFromDirector();
+      orrery.setVisualStage(4.0);
+      orrery.debugChapter5Reset();
+
+      eventBus.emit(Events.TARGET, new TargetState(CupKey.SPIKE, 'spike', 0));
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'ch4_clean_catch',
+          catchType: 'CLEAN',
+          cupKey: 'spike'
+        }
+      });
+
+      // Chapter 4 should trigger Roche disruption, but NOT Chapter 5 supernova deflection
+      expect(orrery._ch5CleanSpikeTriggered).toBe(false);
+      expect(orrery._ch5Phase).toBe('SUPERNOVA_THREAT');
+    });
+
+    it('integrates with TrickSequencer as the canonical source of truth for active target cup', () => {
+      const sequencer = new TrickSequencer(eventBus);
+      const seqDirector = new NarrativeDirector({ eventBus });
+      seqDirector.orreryState.advanceChapter(2);
+      seqDirector.orreryState.advanceChapter(3);
+      seqDirector.orreryState.advanceChapter(4);
+      seqDirector.orreryState.advanceChapter(5);
+
+      const orreryWithSeq = new OrreryVisualSystem({
+        eventBus,
+        narrativeDirector: seqDirector,
+        trickSequencer: sequencer
+      });
+      orreryWithSeq._syncFromDirector();
+
+      // In Chapter 1 trick pattern, active target is BIG
+      sequencer.setChapter(1);
+      expect(orreryWithSeq.getActiveTargetCup()).toBe(CupKey.BIG);
+
+      // Clean score during non-spike target does not trigger Chapter 5
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'seq_clean_big',
+          catchType: 'CLEAN'
+        }
+      });
+      expect(orreryWithSeq._ch5CleanSpikeTriggered).toBe(false);
+
+      // Sequencer advances to Chapter 4+ (SPIKE trick)
+      sequencer.setChapter(4);
+      expect(orreryWithSeq.getActiveTargetCup()).toBe(CupKey.SPIKE);
+
+      // Clean score on SPIKE target successfully triggers Chapter 5
+      eventBus.emit(Events.SCORE, {
+        payload: {
+          eventId: 'seq_clean_spike',
+          catchType: 'CLEAN'
+        }
+      });
+      expect(orreryWithSeq._ch5CleanSpikeTriggered).toBe(true);
+      expect(orreryWithSeq._ch5Phase).toBe('SUPERNOVA_DEFLECTION');
+
+      orreryWithSeq.destroy();
+    });
+
+    it('debugChapter5 APIs support all showcase states, reject invalid states, and reset accurately', () => {
+      // Test all states
+      expect(orrery.debugChapter5('supernova_threat')).toBe(true);
+      let snap = orrery.getChapter5DebugState();
+      expect(snap.debugMode).toBe(true);
+      expect(snap.phase).toBe('SUPERNOVA_THREAT');
+      expect(snap.visualStage).toBe(5.0);
+      expect(snap.goldIgnited).toBe(1.0);
+      expect(snap.collapsingStarVisible).toBe(true);
+      expect(snap.protagonistPlanetVisible).toBe(true);
+
+      expect(orrery.debugChapter5('star_agitated')).toBe(true);
+      expect(orrery.getChapter5DebugState().phase).toBe('STAR_AGITATED');
+
+      expect(orrery.debugChapter5('star_collapse')).toBe(true);
+      expect(orrery.getChapter5DebugState().phase).toBe('STAR_COLLAPSE');
+
+      expect(orrery.debugChapter5('supernova_deflection')).toBe(true);
+      expect(orrery.getChapter5DebugState().phase).toBe('SUPERNOVA_DEFLECTION');
+
+      expect(orrery.debugChapter5('atmosphere_protected')).toBe(true);
+      expect(orrery.getChapter5DebugState().phase).toBe('ATMOSPHERE_PROTECTED');
+
+      // Rejects invalid state
+      expect(orrery.debugChapter5('invalid_supernova_phase')).toBe(false);
+
+      // Reset
+      expect(orrery.debugChapter5Reset()).toBe(true);
+      snap = orrery.getChapter5DebugState();
+      expect(snap.debugMode).toBe(false);
+      expect(snap.phase).toBe('SUPERNOVA_THREAT');
+    });
+
+    it('supports setChapter5DebugState alias matching debugChapter5 across all states and resets', () => {
+      expect(typeof orrery.setChapter5DebugState).toBe('function');
+      expect(typeof orrery.debugChapter5).toBe('function');
+      expect(typeof orrery.debugChapter5Reset).toBe('function');
+      expect(typeof orrery.resetChapter5DebugState).toBe('function');
+
+      expect(orrery.setChapter5DebugState('supernova_threat')).toBe(true);
+      expect(orrery.getChapter5DebugState().phase).toBe('SUPERNOVA_THREAT');
+      expect(orrery.isVisible()).toBe(true);
+      expect(orrery.group.visible).toBe(true);
+
+      expect(orrery.setChapter5DebugState('star_agitated')).toBe(true);
+      expect(orrery.getChapter5DebugState().phase).toBe('STAR_AGITATED');
+
+      expect(orrery.setChapter5DebugState('star_collapse')).toBe(true);
+      expect(orrery.getChapter5DebugState().phase).toBe('STAR_COLLAPSE');
+
+      expect(orrery.setChapter5DebugState('supernova_deflection')).toBe(true);
+      expect(orrery.getChapter5DebugState().phase).toBe('SUPERNOVA_DEFLECTION');
+
+      expect(orrery.setChapter5DebugState('atmosphere_protected')).toBe(true);
+      expect(orrery.getChapter5DebugState().phase).toBe('ATMOSPHERE_PROTECTED');
+
+      expect(orrery.setChapter5DebugState('invalid_state')).toBe(false);
+
+      expect(orrery.debugChapter5Reset()).toBe(true);
+      expect(orrery.getChapter5DebugState().debugMode).toBe(false);
+    });
+
+    it('protects Chapter 5 Stage 5 planet from setVisualStage(1.0) clobbering', () => {
+      advanceToChapter5();
+      expect(orrery.activeChapter).toBe(5);
+
+      // Attempt to overwrite stage with Stage 1
+      orrery.setVisualStage(1.0);
+
+      // Chapter 5 planet must preserve Stage 5 uniforms
+      const u = orrery.ch5PlanetNode.material.uniforms;
+      expect(u.uVisualStage.value).toBe(5.0);
+      expect(u.uGoldIgnited.value).toBe(1.0);
+      expect(orrery.ch5Atmosphere.visible).toBe(true);
+    });
+
+    it('returns the Stage 5 Transcendent Celestial World node for getPlanetNode(5) and getActivePlanetoidNode()', () => {
+      expect(orrery.getPlanetNode(5)).toBe(orrery.ch5PlanetNode);
+      advanceToChapter5();
+      expect(orrery.getActivePlanetoidNode()).toBe(orrery.ch5PlanetNode);
+    });
+
+    it('builds 3D paraboloid magnetospheric bow geometry with expected attributes and bounding envelope', () => {
+      const geom = createMagnetosphericBowGeometry({ apexRadius: 0.46, flareDepth: 0.36, width: 0.52 });
+      expect(geom.attributes.position).toBeDefined();
+      expect(geom.attributes.normal).toBeDefined();
+      expect(geom.attributes.uv).toBeDefined();
+      expect(geom.index).toBeDefined();
+      expect(geom.attributes.position.count).toBeGreaterThan(50);
+      geom.computeBoundingBox();
+      expect(geom.boundingBox.min.x).toBeCloseTo(0.10, 2);
+      expect(geom.boundingBox.max.x).toBeCloseTo(0.46, 2);
+      geom.dispose();
+    });
+
+    it('creates magnetoshield shader material with celestial gold, cyan Fresnel, ripple uniform and opacity property', () => {
+      const mat = createMagnetoshieldMaterial();
+      expect(mat.uniforms.uGoldColor).toBeDefined();
+      expect(mat.uniforms.uCyanColor).toBeDefined();
+      expect(mat.uniforms.uRipple).toBeDefined();
+      expect(mat.uniforms.uTime).toBeDefined();
+      expect(mat.transparent).toBe(true);
+      expect(mat.depthWrite).toBe(false);
+
+      // Opacity property synchronization
+      mat.opacity = 0.72;
+      expect(mat.opacity).toBeCloseTo(0.72);
+      expect(mat.uniforms.uOpacity.value).toBeCloseTo(0.72);
+      mat.dispose();
+    });
+
+    it('creates directional shockwave arc line and trailing sheath geometries', () => {
+      const arcGeom = createDirectionalShockwaveArcLineGeometry({ radius: 0.25, arcAngle: Math.PI * 0.55 });
+      expect(arcGeom.attributes.position).toBeDefined();
+      expect(arcGeom.attributes.position.count).toBeGreaterThan(10);
+      arcGeom.dispose();
+
+      const sheathGeom = createDirectionalShockwaveGeometry({ radius: 0.25, thickness: 0.05, arcAngle: Math.PI * 0.55 });
+      expect(sheathGeom.attributes.position).toBeDefined();
+      expect(sheathGeom.attributes.uv).toBeDefined();
+      expect(sheathGeom.index).toBeDefined();
+      sheathGeom.dispose();
+    });
+
+    it('verifies redesigned Chapter 5 visual system configuration and deflection choreography', () => {
+      advanceToChapter5();
+      expect(orrery.ch5PlanetNode.scale.x).toBeCloseTo(0.45);
+      expect(orrery.ch5PlanetNode.position.x).toBeCloseTo(0.18, 2);
+      expect(orrery.ch5PlanetNode.position.y).toBeCloseTo(-0.05, 2);
+      expect(orrery.ch5Magnetoshield.name).toBe('magnetoshield-dome');
+      expect(orrery.ch5ShockwaveLine).toBeDefined();
+      expect(orrery.ch5ShockwaveBody).toBeDefined();
+      expect(orrery.ch5SupernovaFilaments).toBeDefined();
+
+      orrery.debugChapter5('supernova_deflection');
+      expect(orrery.ch5ShockwaveLine.position.x).toBeCloseTo(-0.305, 2);
+      expect(orrery.ch5ShockwaveLine.position.y).toBeCloseTo(0.139, 2);
+      expect(orrery.ch5SupernovaFilaments.visible).toBe(true);
+      expect(orrery.ch5Magnetoshield.material.uniforms.uRipple.value).toBeGreaterThan(0.7);
+
+      orrery.debugChapter5Reset();
+      expect(orrery.ch5Magnetoshield.material.uniforms.uRipple.value).toBeCloseTo(0.0);
+      expect(orrery.ch5SupernovaFilaments.visible).toBe(false);
+    });
+
+    it('creates stellar corona and fragment materials with proper uniforms and shaders', () => {
+      const coronaMat = createStellarCoronaMaterial();
+      expect(coronaMat).toBeDefined();
+      expect(coronaMat.uniforms.uBrightness).toBeDefined();
+      expect(coronaMat.uniforms.uTurbulence).toBeDefined();
+      expect(coronaMat.uniforms.uInnerColor).toBeDefined();
+      expect(coronaMat.uniforms.uMidColor).toBeDefined();
+      expect(coronaMat.uniforms.uOuterColor).toBeDefined();
+      coronaMat.dispose();
+
+      const fragMat = createStellarFragmentMaterial();
+      expect(fragMat).toBeDefined();
+      expect(fragMat.uniforms.uGlow).toBeDefined();
+      expect(fragMat.uniforms.uFlashIntensity).toBeDefined();
+      expect(fragMat.uniforms.uCrustColor).toBeDefined();
+      expect(fragMat.uniforms.uMagmaColor).toBeDefined();
+      expect(fragMat.uniforms.uHotColor).toBeDefined();
+      fragMat.dispose();
+    });
+
+    it('implements visible stellar fragmentation with 14 distinct chunks and staged collapse sequence', () => {
+      advanceToChapter5();
+      expect(CH5_STELLAR_FRAGMENT_COUNT).toBe(14);
+      expect(orrery.ch5StellarFragments).toBeDefined();
+      expect(orrery.ch5StellarFragments.count).toBe(14);
+      expect(orrery._ch5FragmentData.length).toBe(14 * 12);
+
+      // Verify fragment data is initialized with valid unit directions and positive speeds
+      for (let i = 0; i < 14; i++) {
+        const idx = i * 12;
+        const ux = orrery._ch5FragmentData[idx + 0];
+        const uy = orrery._ch5FragmentData[idx + 1];
+        const uz = orrery._ch5FragmentData[idx + 2];
+        const speed = orrery._ch5FragmentData[idx + 3];
+        const baseScale = orrery._ch5FragmentData[idx + 8];
+        const tLift = orrery._ch5FragmentData[idx + 9];
+
+        const len = Math.sqrt(ux * ux + uy * uy + uz * uz);
+        expect(len).toBeCloseTo(1.0, 2);
+        expect(speed).toBeGreaterThan(0.5);
+        expect(baseScale).toBeGreaterThan(0.02);
+        expect(tLift).toBeGreaterThanOrEqual(0.20);
+        expect(tLift).toBeLessThanOrEqual(0.50);
+      }
+
+      // In supernova_threat: fragments are inactive/invisible
+      orrery.debugChapter5('supernova_threat');
+      expect(orrery.ch5StellarFragments.visible).toBe(false);
+      expect(orrery.ch5StellarCorona.visible).toBe(true);
+      expect(orrery.ch5StellarInnerCore.visible).toBe(true);
+
+      // In star_agitated: corona turbulence increases
+      orrery.debugChapter5('star_agitated');
+      expect(orrery.ch5StellarFragments.visible).toBe(false);
+      expect(orrery.ch5CoronaMaterial.uniforms.uBrightness.value).toBeGreaterThan(0.5);
+
+      // In star_collapse: black box eliminated across all Chapter 5 states
+      orrery.debugChapter5('star_collapse');
+      expect(orrery.ch5StellarFragments.visible).toBe(false);
+      expect(orrery.ch5StellarCore.scale.x).toBeLessThan(0.18);
+      expect(orrery.ch5StarMaterial.uniforms.uFlashPulse.value).toBeGreaterThan(0.8);
+
+      // In supernova_deflection: 140 flowing filaments in motion
+      orrery.debugChapter5('supernova_deflection');
+      expect(CH5_SUPERNOVA_FILAMENT_COUNT).toBe(140);
+      expect(orrery.ch5SupernovaFilaments.count).toBe(140);
+      expect(orrery.ch5SupernovaFilaments.visible).toBe(true);
+
+      // In atmosphere_protected: fragments and wave dissipated, remnant star calm
+      orrery.debugChapter5('atmosphere_protected');
+      expect(orrery.ch5StellarFragments.visible).toBe(false);
+      expect(orrery.ch5SupernovaFilaments.visible).toBe(false);
+      expect(orrery.ch5StellarCore.scale.x).toBeCloseTo(0.055, 2);
+      expect(orrery.ch5StellarInnerCore.scale.x).toBeCloseTo(0.055, 2);
+    });
+
+    it('verifies Chapter 5 debug status exposure and foreground planetoid suppression', () => {
+      expect(typeof orrery.isChapter5DebugActive).toBe('function');
+      expect(orrery.isChapter5DebugActive()).toBe(false);
+
+      orrery.setChapter5DebugState('supernova_threat');
+      expect(orrery.isChapter5DebugActive()).toBe(true);
+
+      // Verify Chapter 5 rings are suppressed
+      expect(orrery.ch5InnerRing.visible).toBe(false);
+      expect(orrery.ch5OuterRing.visible).toBe(false);
+
+      // Verify dying star crust material remains dark charcoal with sparse fissures
+      expect(orrery.ch5StarMaterial).toBeDefined();
+      expect(orrery.ch5StarMaterial.uniforms.uCrackScale.value).toBe(4.0);
+
+      orrery.debugChapter5Reset();
+      expect(orrery.isChapter5DebugActive()).toBe(false);
+    });
+
+    it('reuses Chapter 2 Binary Resonance wave implementation pattern for Chapter 5 supernova wave', () => {
+      advanceToChapter5();
+      expect(orrery.ch5ShockwaveLine).toBeDefined();
+      expect(orrery.ch5ShockwaveEchoMesh).toBeDefined();
+      expect(orrery.ch5ShockwaveBody).toBeDefined();
+
+      // Verify Chapter 2 Binary Resonance geometry and material pattern
+      expect(orrery.ch5ShockwaveLine.geometry.type).toBe('RingGeometry');
+      expect(orrery.ch5ShockwaveLine.material.transparent).toBe(true);
+      expect(orrery.ch5ShockwaveLine.material.depthWrite).toBe(false);
+      expect(orrery.ch5ShockwaveEchoMesh.geometry.type).toBe('RingGeometry');
+      expect(orrery.ch5ShockwaveEchoMesh.material.transparent).toBe(true);
+      expect(orrery.ch5ShockwaveEchoMesh.material.depthWrite).toBe(false);
+
+      // Verify dummy shockwave-body has zero geometry
+      expect(orrery.ch5ShockwaveBody.geometry).toBeUndefined();
+
+      // In supernova_deflection: wave is at bow shock apex in front of Our Planet
+      orrery.debugChapter5('supernova_deflection');
+      expect(orrery.ch5ShockwaveLine.visible).toBe(true);
+      expect(orrery.ch5ShockwaveEchoMesh.visible).toBe(true);
+      expect(orrery.ch5ShockwaveLine.position.x).toBeCloseTo(-0.305, 2);
+      expect(orrery.ch5ShockwaveLine.position.y).toBeCloseTo(0.139, 2);
+      expect(orrery.ch5ShockwaveEchoMesh.position.x).toBeCloseTo(-0.305, 2);
+      expect(orrery.ch5ShockwaveEchoMesh.position.y).toBeCloseTo(0.139, 2);
+
+      // Verify filaments are active in deflection and stream along directional flow
+      expect(orrery.ch5SupernovaFilaments.visible).toBe(true);
+      expect(orrery.ch5SupernovaFilaments.material.depthWrite).toBe(false);
+
+      orrery.debugChapter5Reset();
+      expect(orrery.ch5ShockwaveLine.visible).toBe(false);
+      expect(orrery.ch5ShockwaveEchoMesh.visible).toBe(false);
+      expect(orrery.ch5SupernovaFilaments.visible).toBe(false);
+    });
+
+    it('completely removes black window artifact across all Chapter 5 states and eliminates crust body when stellar body breaks apart', () => {
+      advanceToChapter5();
+
+      // In supernova_threat: no black window, star is intact dark sphere, wave & fragments hidden
+      orrery.debugChapter5('supernova_threat');
+      expect(orrery.ch5ShockwaveLine.visible).toBe(false);
+      expect(orrery.ch5ShockwaveEchoMesh.visible).toBe(false);
+      expect(orrery.ch5StellarFragments.visible).toBe(false);
+      expect(orrery.ch5InnerRing.visible).toBe(false);
+      expect(orrery.ch5OuterRing.visible).toBe(false);
+      expect(orrery.ch1StableStateText?.visible).toBeFalsy();
+      expect(orrery.ch1TextShimmerGlint?.visible).toBeFalsy();
+
+      // In star_agitated: zero black window, fragments hidden
+      orrery.debugChapter5('star_agitated');
+      expect(orrery.ch5ShockwaveLine.visible).toBe(false);
+      expect(orrery.ch5ShockwaveEchoMesh.visible).toBe(false);
+      expect(orrery.ch5StellarFragments.visible).toBe(false);
+
+      // In star_collapse: black box eliminated across all Chapter 5 states
+      orrery.debugChapter5('star_collapse');
+      expect(orrery.ch5StellarFragments.visible).toBe(false);
+      // Dark outer crust shell is completely removed (scale 0, visible false)
+      expect(orrery.ch5StellarCore.visible).toBe(false);
+      expect(orrery.ch5StellarCore.scale.x).toBe(0.0);
+      // Hot crimson inner core is exposed
+      expect(orrery.ch5StellarInnerCore.visible).toBe(true);
+      expect(orrery.ch5StellarInnerCore.scale.x).toBeCloseTo(0.055, 2);
+
+      // In supernova_deflection: no black window, wave travels cleanly
+      orrery.debugChapter5('supernova_deflection');
+      expect(orrery.ch5ShockwaveBody.visible).toBe(false);
+      expect(orrery.ch5ShockwaveLine.visible).toBe(true);
+      expect(orrery.ch5ShockwaveLine.material.depthWrite).toBe(false);
+
+      orrery.debugChapter5Reset();
+    });
+
+    it('shares exact same createBinaryResonanceWave implementation between Chapter 2 and Chapter 5', () => {
+      advanceToChapter5();
+      // Chapter 2 shockwave geometries
+      expect(orrery.ch2ShockwaveMesh.geometry.type).toBe('RingGeometry');
+      expect(orrery.ch2ShockwaveMesh.geometry.parameters.innerRadius).toBeCloseTo(0.78, 2);
+      expect(orrery.ch2ShockwaveMesh.geometry.parameters.outerRadius).toBeCloseTo(0.88, 2);
+      expect(orrery.ch2ShockwaveEchoMesh.geometry.parameters.innerRadius).toBeCloseTo(0.70, 2);
+      expect(orrery.ch2ShockwaveEchoMesh.geometry.parameters.outerRadius).toBeCloseTo(0.82, 2);
+
+      // Chapter 5 shockwave geometries must match the exact same parameters
+      expect(orrery.ch5ShockwaveLine.geometry.type).toBe('RingGeometry');
+      expect(orrery.ch5ShockwaveLine.geometry.parameters.innerRadius).toBeCloseTo(0.78, 2);
+      expect(orrery.ch5ShockwaveLine.geometry.parameters.outerRadius).toBeCloseTo(0.88, 2);
+      expect(orrery.ch5ShockwaveEchoMesh.geometry.type).toBe('RingGeometry');
+      expect(orrery.ch5ShockwaveEchoMesh.geometry.parameters.innerRadius).toBeCloseTo(0.70, 2);
+      expect(orrery.ch5ShockwaveEchoMesh.geometry.parameters.outerRadius).toBeCloseTo(0.82, 2);
+
+      // Both must use DoubleSide, transparent, depthWrite: false, and AdditiveBlending
+      expect(orrery.ch5ShockwaveLine.material.depthWrite).toBe(false);
+      expect(orrery.ch5ShockwaveLine.material.transparent).toBe(true);
+      expect(orrery.ch5ShockwaveLine.material.blending).toBe(2); // AdditiveBlending
+      expect(orrery.ch5ShockwaveEchoMesh.material.depthWrite).toBe(false);
+      expect(orrery.ch5ShockwaveEchoMesh.material.transparent).toBe(true);
+      expect(orrery.ch5ShockwaveEchoMesh.material.blending).toBe(2); // AdditiveBlending
+    });
+
+    it('evaluates and updates binary resonance wave with identical mathematical envelope', () => {
+      const wave = createBinaryResonanceWave({
+        primaryColor: '#FFA834',
+        echoColor: '#F5E6C8'
+      });
+      expect(wave.primaryMesh.visible).toBe(false);
+
+      // Evaluate at t = 0.10s (compact phase)
+      const rCompact = evaluateBinaryResonanceWave(0.10, 1.0);
+      expect(rCompact.active).toBe(true);
+      expect(rCompact.primary.scale).toBeCloseTo(0.30, 2);
+      expect(rCompact.primary.opacity).toBeCloseTo(0.80, 2);
+
+      // Evaluate at t = 0.45s (expansion phase)
+      const rExpand = evaluateBinaryResonanceWave(0.45, 1.0);
+      expect(rExpand.active).toBe(true);
+      expect(rExpand.primary.scale).toBeGreaterThan(1.0);
+      expect(rExpand.primary.opacity).toBeLessThan(0.90);
+
+      // Evaluate after duration (inactive)
+      const rEnd = evaluateBinaryResonanceWave(1.05, 1.0);
+      expect(rEnd.active).toBe(false);
+      expect(rEnd.primary.visible).toBe(false);
+
+      // updateBinaryResonanceWave
+      updateBinaryResonanceWave(wave.primaryMesh, wave.echoMesh, 0.10, { duration: 1.0 });
+      expect(wave.primaryMesh.visible).toBe(true);
+      expect(wave.primaryMesh.scale.x).toBeCloseTo(0.30, 2);
+
+      resetBinaryResonanceWave(wave.primaryMesh, wave.echoMesh);
+      expect(wave.primaryMesh.visible).toBe(false);
+      expect(wave.primaryMesh.scale.x).toBeCloseTo(0.20, 2);
+      expect(wave.primaryMesh.material.opacity).toBe(0.0);
+    });
+
+    it('eliminates black box during STAR_COLLAPSE and survives 10+ seconds with zero leaks or errors', () => {
+      advanceToChapter5();
+
+      const rootScene = new Group();
+      rootScene.name = 'mock-root-scene';
+      rootScene.add(orrery.group);
+
+      // Create a mock welcome-panel hierarchy mimicking UIKitML structure
+      const welcomeContainer = new Group();
+      welcomeContainer.name = 'Welcome Panel';
+      welcomeContainer.userData = { iwsdkSceneNodeId: 'welcome-panel' };
+      const welcomeChildQuad = new Mesh(new PlaneGeometry(0.85, 0.58), new MeshBasicMaterial({ opacity: 0.92 }));
+      welcomeChildQuad.name = 'Panel';
+      welcomeContainer.add(welcomeChildQuad);
+      rootScene.add(welcomeContainer);
+
+      // Set Chapter 5 state to STAR_COLLAPSE
+      expect(() => {
+        orrery.setChapter5DebugState('star_collapse');
+      }).not.toThrow();
+
+      // welcomeContainer and all child quads must be completely banished
+      expect(welcomeContainer.visible).toBe(false);
+      expect(welcomeChildQuad.visible).toBe(false);
+      expect(welcomeChildQuad.position.y).toBe(-9999);
+      expect(welcomeChildQuad.material.opacity).toBe(0.0);
+      expect(welcomeChildQuad.material.depthWrite).toBe(false);
+
+      // Star is collapsing, shockwave is reset / inactive
+      expect(orrery.ch5ShockwaveLine.visible).toBe(false);
+      expect(orrery.ch5ShockwaveEchoMesh.visible).toBe(false);
+
+      // Run 625 frames (~10 seconds at 60fps) in STAR_COLLAPSE
+      expect(() => {
+        for (let frame = 0; frame < 625; frame++) {
+          orrery.update(0.016);
+          // Zero leaks across every frame
+          expect(welcomeChildQuad.visible).toBe(false);
+          expect(welcomeChildQuad.position.y).toBe(-9999);
+          expect(welcomeChildQuad.material.opacity).toBe(0.0);
+        }
+      }).not.toThrow();
+
+      orrery.debugChapter5Reset();
+    });
+
+    it('locks Stage 5 Celestial World identity on Chapter 5 protagonist planet without falling back to Stage 4', () => {
+      advanceToChapter5();
+      expect(orrery.ch5PlanetNode).toBeDefined();
+      expect(orrery.ch5PlanetNode.visible).toBe(true);
+      expect(orrery.ch5PlanetNode.scale.x).toBeCloseTo(0.45, 2);
+
+      const uCore = orrery.ch5PlanetNode.material.uniforms;
+      expect(uCore.uVisualStage.value).toBe(5.0);
+      expect(uCore.uGoldIgnited.value).toBe(1.0);
+      expect(uCore.uAtmosphereDensity.value).toBe(1.0);
+      expect(uCore.uOceanFill.value).toBe(1.0);
+      expect(uCore.uKintsugiGlow.value).toBe(1.0);
+
+      // Verify external setVisualStage(1.0) or (4.0) calls cannot clobber Chapter 5 Stage 5 world
+      orrery.setVisualStage(1.0);
+      orrery.update(0.016);
+      expect(orrery.ch5PlanetNode.material.uniforms.uVisualStage.value).toBe(5.0);
+      expect(orrery.ch5PlanetNode.material.uniforms.uGoldIgnited.value).toBe(1.0);
+    });
+
+    it('ensures Stage 5 protagonist planet NEVER breaks and remains 100% intact throughout STAR_COLLAPSE', () => {
+      advanceToChapter5();
+      expect(orrery.ch5PlanetFragments).toBeUndefined();
+      expect(orrery.ch5PlanetNode).toBeDefined();
+      expect(orrery.ch5PlanetNode.visible).toBe(true);
+      expect(orrery.ch5PlanetNode.scale.x).toBeCloseTo(0.45, 2);
+
+      // Trigger STAR_COLLAPSE sequence
+      orrery._ch5Phase = 'STAR_COLLAPSE';
+      orrery._ch5CollapseElapsed = 0.0;
+
+      // Sample frames across the entire 0.00s -> 3.20s collapse and shockwave lifecycle
+      const testTimes = [0.0, 0.20, 0.45, 0.70, 1.00, 1.25, 1.35, 1.60, 2.00, 2.25, 2.50, 3.00, 3.20];
+      for (const t of testTimes) {
+        orrery._ch5CollapseElapsed = t;
+        orrery._updateChapter5(0.016, 0.70, ManeuverStatus.CALIBRATING, OrbitalState.SUPERNOVA_THREAT);
+
+        // Planet must remain permanently visible, intact, and at Stage 5 scale
+        expect(orrery.ch5PlanetNode.visible).toBe(true);
+        expect(orrery.ch5Atmosphere.visible).toBe(true);
+        expect(orrery.ch5PlanetNode.scale.x).toBeCloseTo(0.45, 2);
+        expect(orrery.ch5PlanetNode.scale.y).toBeCloseTo(0.45, 2);
+        expect(orrery.ch5PlanetNode.scale.z).toBeCloseTo(0.45, 2);
+        expect(orrery.ch5PlanetNode.material.uniforms.uVisualStage.value).toBe(5.0);
+      }
+
+      // At wave contact (t >= 2.25s), the surviving planet activates its magnetoshield dome
+      orrery._ch5CollapseElapsed = 2.40;
+      orrery._updateChapter5(0.016, 0.70, ManeuverStatus.CALIBRATING, OrbitalState.SUPERNOVA_THREAT);
+      expect(orrery.ch5Magnetoshield.visible).toBe(true);
+      expect(orrery.ch5PlanetMaterial.uniforms.uShieldCharge.value).toBeGreaterThan(0.0);
+      expect(orrery.ch5PlanetNode.visible).toBe(true);
+
+      // Reset keeps intact Stage 5 planet
+      orrery.debugChapter5Reset();
+      expect(orrery.ch5PlanetNode.visible).toBe(true);
+      expect(orrery.ch5PlanetNode.scale.x).toBeCloseTo(0.45, 2);
+      expect(orrery.ch5PlanetNode.material.uniforms.uVisualStage.value).toBe(5.0);
+    });
+
+    it('orchestrates deterministic star collapse and fragmentation at (-1.35, 0.55, 0.0) with shockwave eruption', () => {
+      advanceToChapter5();
+      expect(orrery.ch5StellarFragments).toBeDefined();
+      expect(orrery.ch5StellarFragments.count).toBe(14);
+      expect(orrery.ch5StellarFragments.visible).toBe(false);
+
+      // Trigger STAR_COLLAPSE sequence
+      orrery._ch5Phase = 'STAR_COLLAPSE';
+      orrery._ch5CollapseElapsed = 0.0;
+
+      // Phase 1 (0.00s - 0.25s): Pre-fracture compression
+      orrery._ch5CollapseElapsed = 0.15;
+      orrery._updateChapter5(0.016, 0.70, ManeuverStatus.CALIBRATING, OrbitalState.SUPERNOVA_THREAT);
+      expect(orrery.ch5StellarFragments.visible).toBe(false);
+      expect(orrery.ch5ShockwaveLine.visible).toBe(false);
+
+      // Phase 2 (0.25s - 0.50s): Surface fracture lines develop
+      orrery._ch5CollapseElapsed = 0.35;
+      orrery._updateChapter5(0.016, 0.70, ManeuverStatus.CALIBRATING, OrbitalState.SUPERNOVA_THREAT);
+      expect(orrery.ch5StellarFragments.visible).toBe(false);
+
+      // Phase 3 (0.50s - 0.85s): First stellar shell fragments detach from star
+      orrery._ch5CollapseElapsed = 0.65;
+      orrery._updateChapter5(0.016, 0.70, ManeuverStatus.CALIBRATING, OrbitalState.SUPERNOVA_THREAT);
+      expect(orrery.ch5StellarFragments.visible).toBe(true);
+      expect(orrery.ch5ShockwaveLine.visible).toBe(false);
+
+      // Phase 5 (1.05s - 1.25s): Core collapses to zero
+      orrery._ch5CollapseElapsed = 1.25;
+      orrery._updateChapter5(0.016, 0.70, ManeuverStatus.CALIBRATING, OrbitalState.SUPERNOVA_THREAT);
+      expect(orrery.ch5StellarCore.scale.x).toBeCloseTo(0.0, 2);
+      expect(orrery.ch5StellarInnerCore.visible).toBe(true);
+
+      // Phase 6 (1.25s - 1.40s): Supernova flash peaks
+      orrery._ch5CollapseElapsed = 1.35;
+      orrery._updateChapter5(0.016, 0.70, ManeuverStatus.CALIBRATING, OrbitalState.SUPERNOVA_THREAT);
+      expect(orrery.ch5StarMaterial.uniforms.uFlashPulse.value).toBeGreaterThan(0.0);
+      expect(orrery.ch5FragmentMaterial.uniforms.uFlashIntensity.value).toBeGreaterThan(0.0);
+
+      // Phase 7 (1.40s+): Shockwave erupts from star and travels across space
+      orrery._ch5CollapseElapsed = 1.80;
+      orrery._updateChapter5(0.016, 0.70, ManeuverStatus.CALIBRATING, OrbitalState.SUPERNOVA_THREAT);
+      expect(orrery.ch5ShockwaveLine.visible).toBe(true);
+      expect(orrery.ch5ShockwaveEchoMesh.visible).toBe(true);
+      expect(orrery.ch5ShockwaveLine.scale.x).toBeGreaterThan(0.5);
+
+      // Star fragments remain visible and dispersed
+      expect(orrery.ch5StellarFragments.visible).toBe(true);
+
+      // Reset cleans up fragments and restores baseline star
+      orrery.debugChapter5Reset();
+      expect(orrery.ch5StellarFragments.visible).toBe(false);
+      expect(orrery.ch5StellarCore.scale.x).toBeCloseTo(0.18, 2);
     });
   });
 });

@@ -763,13 +763,25 @@ export class PlanetUnlockUI {
   }
 
   /**
+   * Helper checking whether Chapter 5 is active in OrreryVisualSystem.
+   * During Chapter 5, the unlock achievement UI card must remain strictly suppressed.
+   * @private
+   * @returns {boolean}
+   */
+  _isChapter5Active() {
+    const globalScope = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
+    const orrery = globalScope?.orreryVisualSystem || globalScope?.__ORRERY_SYSTEM__ || globalScope?.celestialEnvironment?.orreryVisualSystem;
+    return Boolean(orrery && (orrery.activeChapter === 5 || orrery._chapter5DebugMode || (typeof orrery.isChapter5DebugActive === 'function' && orrery.isChapter5DebugActive())));
+  }
+
+  /**
    * Forces the unlock card to be immediately visible in HOLDING state at the calibrated location.
    * Bypasses the celebration and delay/arrival phases for rapid visual tuning and runtime verification.
    * @param {number} [stage=2]
    * @returns {boolean} True if presentation was forced visible
    */
   debugForceVisible(stage = 2) {
-    if (this.state === UnlockUIState.DESTROYED) {
+    if (this.state === UnlockUIState.DESTROYED || this._isChapter5Active()) {
       return false;
     }
 
@@ -873,7 +885,7 @@ export class PlanetUnlockUI {
    * @returns {boolean} True if presentation started, false if blocked or duplicate
    */
   show(stage = 2) {
-    if (this.state === UnlockUIState.DESTROYED) {
+    if (this.state === UnlockUIState.DESTROYED || this._isChapter5Active()) {
       return false;
     }
     // Prevent duplicate triggers if already showing
@@ -954,6 +966,23 @@ export class PlanetUnlockUI {
    * @param {number} dt - Frame delta time in seconds
    */
   update(dt) {
+    if (this._isChapter5Active()) {
+      if (this.isShowing || this.group?.visible || this.mesh?.visible) {
+        this.isShowing = false;
+        this.state = UnlockUIState.IDLE;
+        this.phase = UnlockUIPhase.IDLE;
+        if (this.group) this.group.visible = false;
+        if (this.mesh) {
+          this.mesh.visible = false;
+          this.mesh.position.set(0, -9999, 0);
+          this.mesh.scale.set(0.0001, 0.0001, 0.0001);
+        }
+        if (this.material?.uniforms?.uOpacity) {
+          this.material.uniforms.uOpacity.value = 0.0;
+        }
+      }
+      return;
+    }
     if (!this.isShowing || (this.state !== UnlockUIState.SHOWING && this.state !== UnlockUIState.HOLDING)) {
       return;
     }

@@ -661,6 +661,11 @@ export class CelestialEnvironmentSystem extends createSystem({
                 this.landmarksGroup.add(this.orreryVisualSystem.group);
             }
         }
+        const globalScope = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
+        if (globalScope) {
+            globalScope.orreryVisualSystem = this.orreryVisualSystem;
+            globalScope.__ORRERY_SYSTEM__ = this.orreryVisualSystem;
+        }
         return this.orreryVisualSystem;
     }
 
@@ -681,8 +686,13 @@ export class CelestialEnvironmentSystem extends createSystem({
                 // In gameplay mode, the Three-Body planetary body is the visible representation
                 // of Our Planet. The close-up PlanetoidRenderer is hidden so it does not compete,
                 // remaining active for showcase, showroom, and debug modes.
-                const isCh2Active = (this.orreryVisualSystem && (this.orreryVisualSystem.getChapter() === 2 || (typeof this.orreryVisualSystem.isChapter2DebugActive === 'function' && this.orreryVisualSystem.isChapter2DebugActive())));
-                this.planetoidRenderer.group.visible = !isCh2Active && ((this.mode === 'planet-showcase') || this.planetoidRenderer.isDebugMode());
+                const isCh2Or5Active = (this.orreryVisualSystem && (
+                    this.orreryVisualSystem.getChapter() === 2 ||
+                    this.orreryVisualSystem.getChapter() === 5 ||
+                    (typeof this.orreryVisualSystem.isChapter2DebugActive === 'function' && this.orreryVisualSystem.isChapter2DebugActive()) ||
+                    (typeof this.orreryVisualSystem.isChapter5DebugActive === 'function' && this.orreryVisualSystem.isChapter5DebugActive())
+                ));
+                this.planetoidRenderer.group.visible = !isCh2Or5Active && ((this.mode === 'planet-showcase') || this.planetoidRenderer.isDebugMode());
             }
             if (this.orreryVisualSystem && typeof this.orreryVisualSystem.setPlanetoidRenderer === 'function') {
                 this.orreryVisualSystem.setPlanetoidRenderer(this.planetoidRenderer);
@@ -772,7 +782,10 @@ export class CelestialEnvironmentSystem extends createSystem({
                 globalScope.planetUnlockCelebration = this.unlockCelebration;
                 globalScope.narrativeDirector = this.narrativeDirector;
                 globalScope.orreryVisualSystem = this.orreryVisualSystem;
+                globalScope.__ORRERY_SYSTEM__ = this.orreryVisualSystem;
+                globalScope.planetUnlockUIInstance = this.unlockUI;
                 globalScope.planetUnlockUI = {
+                    get group() { return globalScope.planetUnlockUIInstance?.group; },
                     showStage: (s = 2) => this.unlockUI?.showStage(s),
                     show: (s = 2) => this.unlockUI?.show(s),
                     hide: () => this.unlockUI?.hide(),
@@ -1106,7 +1119,31 @@ export class CelestialEnvironmentSystem extends createSystem({
             if (obj) {
                 this.recordBaseline(obj);
                 obj.visible = false;
+                if (typeof obj.traverse === 'function') {
+                    obj.traverse((child) => {
+                        this.recordBaseline(child);
+                        child.visible = false;
+                    });
+                }
             }
+        }
+
+        // Deep scene traversal to ensure welcome-panel and showroom furniture are 100% hidden
+        if (this.world?.scene?.traverse) {
+            this.world.scene.traverse((obj) => {
+                const nodeId = obj.userData?.iwsdkSceneNodeId;
+                const name = (obj.name || '').toLowerCase();
+                if (nodeId === 'welcome-panel' || name === 'welcome-panel' || name === 'welcome panel' || name.includes('welcome')) {
+                    this.recordBaseline(obj);
+                    obj.visible = false;
+                    if (typeof obj.traverse === 'function') {
+                        obj.traverse((c) => {
+                            this.recordBaseline(c);
+                            c.visible = false;
+                        });
+                    }
+                }
+            });
         }
 
         // Also track originalStudioFloorVisible if studio-floor was found
@@ -1193,7 +1230,13 @@ export class CelestialEnvironmentSystem extends createSystem({
             if (planetoid) {
                 this.updatePlanetoidAnchorFromCamera();
                 if (planetoid.group) {
-                    planetoid.group.visible = true;
+                    const isCh2Or5Active = (this.orreryVisualSystem && (
+                        this.orreryVisualSystem.getChapter() === 2 ||
+                        this.orreryVisualSystem.getChapter() === 5 ||
+                        (typeof this.orreryVisualSystem.isChapter2DebugActive === 'function' && this.orreryVisualSystem.isChapter2DebugActive()) ||
+                        (typeof this.orreryVisualSystem.isChapter5DebugActive === 'function' && this.orreryVisualSystem.isChapter5DebugActive())
+                    ));
+                    planetoid.group.visible = !isCh2Or5Active && ((this.mode === 'planet-showcase') || planetoid.isDebugMode());
                 }
             }
         }
@@ -1211,7 +1254,31 @@ export class CelestialEnvironmentSystem extends createSystem({
             if (obj) {
                 this.recordBaseline(obj);
                 obj.visible = false;
+                if (typeof obj.traverse === 'function') {
+                    obj.traverse((child) => {
+                        this.recordBaseline(child);
+                        child.visible = false;
+                    });
+                }
             }
+        }
+
+        // Deep scene traversal to ensure welcome-panel and showroom furniture are 100% hidden
+        if (this.world?.scene?.traverse) {
+            this.world.scene.traverse((obj) => {
+                const nodeId = obj.userData?.iwsdkSceneNodeId;
+                const name = (obj.name || '').toLowerCase();
+                if (nodeId === 'welcome-panel' || name === 'welcome-panel' || name === 'welcome panel' || name.includes('welcome')) {
+                    this.recordBaseline(obj);
+                    obj.visible = false;
+                    if (typeof obj.traverse === 'function') {
+                        obj.traverse((c) => {
+                            this.recordBaseline(c);
+                            c.visible = false;
+                        });
+                    }
+                }
+            });
         }
 
         // Also track originalStudioFloorVisible if studio-floor was found
@@ -1280,6 +1347,16 @@ export class CelestialEnvironmentSystem extends createSystem({
      * Restores all managed objects to their exact authored visibility states.
      */
     restoreShowroomVisibility() {
+        // Strict guard: In Chapter 5, showroom objects like welcome-panel must never be restored
+        const isCh5Active = this.orreryVisualSystem && (
+            this.orreryVisualSystem.getChapter?.() === 5 ||
+            this.orreryVisualSystem._chapter5DebugMode ||
+            (typeof this.orreryVisualSystem.isChapter5DebugActive === 'function' && this.orreryVisualSystem.isChapter5DebugActive())
+        );
+        if (isCh5Active) {
+            return;
+        }
+
         this._visibilityDirty = false;
         for (const [obj, originalVisible] of this.visibilityBaseline.entries()) {
             if (obj && typeof obj.visible === 'boolean') {
@@ -1404,9 +1481,14 @@ export class CelestialEnvironmentSystem extends createSystem({
                 planetoid.setShowcaseMode(false);
                 this.updatePlanetoidAnchorFromCamera();
                 if (planetoid.group) {
-                    // Close-up PlanetoidRenderer is hidden during gameplay in favor of the Three-Body system
-                    const isCh2Active = (this.orreryVisualSystem && (this.orreryVisualSystem.getChapter() === 2 || (typeof this.orreryVisualSystem.isChapter2DebugActive === 'function' && this.orreryVisualSystem.isChapter2DebugActive())));
-                    planetoid.group.visible = !isCh2Active && Boolean(planetoid.isDebugMode());
+                    // Close-up PlanetoidRenderer is hidden during gameplay in favor of the Three-Body system (Ch2) or Hero World (Ch5)
+                    const isCh2Or5Active = (this.orreryVisualSystem && (
+                        this.orreryVisualSystem.getChapter() === 2 ||
+                        this.orreryVisualSystem.getChapter() === 5 ||
+                        (typeof this.orreryVisualSystem.isChapter2DebugActive === 'function' && this.orreryVisualSystem.isChapter2DebugActive()) ||
+                        (typeof this.orreryVisualSystem.isChapter5DebugActive === 'function' && this.orreryVisualSystem.isChapter5DebugActive())
+                    ));
+                    planetoid.group.visible = !isCh2Or5Active && Boolean(planetoid.isDebugMode());
                 }
             }
             const orrery = this.ensureOrreryVisualSystem();
@@ -1524,6 +1606,15 @@ export class CelestialEnvironmentSystem extends createSystem({
     }
 
     update(dt) {
+        const isCh5 = this.orreryVisualSystem && (
+            this.orreryVisualSystem.getChapter?.() === 5 ||
+            this.orreryVisualSystem._chapter5DebugMode ||
+            (typeof this.orreryVisualSystem.isChapter5DebugActive === 'function' && this.orreryVisualSystem.isChapter5DebugActive())
+        );
+        if (isCh5) {
+            this.applyGameplayVisibility();
+        }
+
         if (this.mode === 'gameplay' || this.mode === 'planet-showcase') {
             const levelRoot = this.getLevelRoot();
             if (levelRoot) {
@@ -1576,10 +1667,28 @@ export class CelestialEnvironmentSystem extends createSystem({
             }
         }
 
-        // Ensure standalone foreground PlanetoidRenderer never competes during Chapter 2
-        const isCh2Active = (this.orreryVisualSystem && (this.orreryVisualSystem.getChapter() === 2 || (typeof this.orreryVisualSystem.isChapter2DebugActive === 'function' && this.orreryVisualSystem.isChapter2DebugActive())));
-        if (isCh2Active && this.planetoidRenderer?.group && !this.planetoidRenderer.isDebugMode()) {
-            this.planetoidRenderer.group.visible = false;
+        // Ensure standalone foreground PlanetoidRenderer never competes during Chapter 2 or Chapter 5
+        const isCh2Or5Active = (this.orreryVisualSystem && (
+            this.orreryVisualSystem.getChapter() === 2 ||
+            this.orreryVisualSystem.getChapter() === 5 ||
+            (typeof this.orreryVisualSystem.isChapter2DebugActive === 'function' && this.orreryVisualSystem.isChapter2DebugActive()) ||
+            (typeof this.orreryVisualSystem.isChapter5DebugActive === 'function' && this.orreryVisualSystem.isChapter5DebugActive())
+        ));
+        if (isCh2Or5Active) {
+            if (this.planetoidRenderer?.group && !this.planetoidRenderer.isDebugMode()) {
+                this.planetoidRenderer.group.visible = false;
+            }
+            if (this.unlockUI) {
+                if (typeof this.unlockUI.hide === 'function') {
+                    this.unlockUI.hide();
+                }
+                if (this.unlockUI.group) {
+                    this.unlockUI.group.visible = false;
+                }
+            }
+            if (this.unlockCelebration?.group) {
+                this.unlockCelebration.group.visible = false;
+            }
         }
 
         // Update PlanetoidRenderer driven by read-only BallState & PlanetState
@@ -1709,6 +1818,9 @@ export class CelestialEnvironmentSystem extends createSystem({
             }
             if (globalScope.orreryVisualSystem === this.orreryVisualSystem) {
                 globalScope.orreryVisualSystem = null;
+            }
+            if (globalScope.__ORRERY_SYSTEM__ === this.orreryVisualSystem) {
+                globalScope.__ORRERY_SYSTEM__ = null;
             }
         }
 

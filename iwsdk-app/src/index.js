@@ -50,6 +50,7 @@ World.create(document.getElementById('scene-container'), projectOptions).then((w
             }
         }
         envSystem.setMode(startupMode);
+        const liveOrrery = envSystem.ensureOrreryVisualSystem();
         if (typeof window !== 'undefined') {
             window.celestialEnvironment = envSystem;
             window.planetoidRenderer = envSystem.planetoidRenderer;
@@ -58,7 +59,8 @@ World.create(document.getElementById('scene-container'), projectOptions).then((w
             window.planetUnlockCelebration = envSystem.unlockCelebration;
             window.planetUnlockUI = envSystem.unlockUI;
             window.narrativeDirector = envSystem.narrativeDirector;
-            window.orreryVisualSystem = envSystem.orreryVisualSystem;
+            window.orreryVisualSystem = liveOrrery;
+            window.__ORRERY_SYSTEM__ = liveOrrery;
         }
         console.log(`[CelestialEnvironmentSystem] Started in "${startupMode}" mode`);
     }
