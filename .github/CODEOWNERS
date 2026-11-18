@@ -1,0 +1,9 @@
+# Replace with real GitHub usernames
+/src/input/     @PERSON_A
+/src/game/      @PERSON_A
+/src/physics/   @PERSON_B
+/src/mission/   @PERSON_B
+/src/render/    @PERSON_C
+/src/audio/     @PERSON_C
+/src/ui/        @PERSON_C
+/src/contracts/ @PERSON_A @PERSON_B @PERSON_C

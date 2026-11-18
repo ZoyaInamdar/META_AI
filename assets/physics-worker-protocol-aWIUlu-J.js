@@ -1,0 +1,1 @@
+const s=1,E=16,O=64,R=24,t=14;function C(S,n){return 64+Math.max(S*24*4,n*14*4)}function P(S,n){if(!Number.isFinite(S)||!Number.isFinite(n)||S<=0||n<S*2)return null;const _=n/2-S;return _===0?[[0,0,0],[0,0,0]]:[[0,-_,0],[0,_,0]]}export{s as P,O as a,t as b,E as c,R as d,P as g,C as p};
