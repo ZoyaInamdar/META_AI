@@ -381,8 +381,8 @@ describe('Gameplay-to-Evolution Full Pipeline Audit & Verification', () => {
       unlockCelebration.update(2.0);
       expect(mockUnlockUI.showStage).not.toHaveBeenCalled();
 
-      // Celebration concludes at 3.80s
-      unlockCelebration.update(1.85); // Total 3.85s >= 3.80s
+      // Celebration concludes after ~5.0s presentation gap
+      unlockCelebration.update(3.05); // Total 5.05s >= 5.00s
       expect(unlockCelebration.getState()).toBe(CelebrationState.COMPLETE);
       expect(mockUnlockUI.showStage).toHaveBeenCalledTimes(1);
       expect(mockUnlockUI.showStage).toHaveBeenCalledWith(2);

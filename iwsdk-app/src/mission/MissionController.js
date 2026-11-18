@@ -387,14 +387,19 @@ export class MissionController {
       return this.getMissionState();
     }
 
+    // Safely normalize canonical wrapped score event { payload: ScoreEvent, awardedEnergy }
+    const score = (typeof scoreEvent === 'object' && scoreEvent !== null && scoreEvent.payload)
+      ? scoreEvent.payload
+      : scoreEvent;
+
     let eventId = null;
     let awardedEnergy = 0;
 
     if (typeof scoreEvent === 'number') {
       awardedEnergy = scoreEvent;
-    } else if (typeof scoreEvent === 'object') {
-      eventId = scoreEvent.eventId ?? null;
-      awardedEnergy = scoreEvent.awardedEnergy ?? scoreEvent.energy ?? 0;
+    } else if (typeof scoreEvent === 'object' && scoreEvent !== null) {
+      eventId = score?.eventId ?? scoreEvent.eventId ?? null;
+      awardedEnergy = scoreEvent.awardedEnergy ?? score?.awardedEnergy ?? score?.energy ?? scoreEvent.energy ?? 0;
     }
 
     if (eventId) {
@@ -411,20 +416,20 @@ export class MissionController {
       // In Chapter 2, track rolling cadence telemetry and evaluate on-cadence impulse
       if (this.chapter === 2) {
         let deltaSec = 0.0;
-        if (typeof scoreEvent === 'object' && scoreEvent !== null) {
-          if (Number.isFinite(scoreEvent.deltaSeconds)) {
-            deltaSec = scoreEvent.deltaSeconds;
-          } else if (Number.isFinite(scoreEvent.deltaMs)) {
-            deltaSec = scoreEvent.deltaMs / 1000.0;
-          } else if (Number.isFinite(scoreEvent.intervalSeconds)) {
-            deltaSec = scoreEvent.intervalSeconds;
-          } else if (Number.isFinite(scoreEvent.timestampMs)) {
+        if (typeof score === 'object' && score !== null) {
+          if (Number.isFinite(score.deltaSeconds)) {
+            deltaSec = score.deltaSeconds;
+          } else if (Number.isFinite(score.deltaMs)) {
+            deltaSec = score.deltaMs / 1000.0;
+          } else if (Number.isFinite(score.intervalSeconds)) {
+            deltaSec = score.intervalSeconds;
+          } else if (Number.isFinite(score.timestampMs)) {
             if (this._lastScoreTimestampMs !== null) {
-              deltaSec = (scoreEvent.timestampMs - this._lastScoreTimestampMs) / 1000.0;
+              deltaSec = (score.timestampMs - this._lastScoreTimestampMs) / 1000.0;
             }
-            this._lastScoreTimestampMs = scoreEvent.timestampMs;
-          } else if (Number.isFinite(scoreEvent.timestamp)) {
-            const tMs = scoreEvent.timestamp > 1e10 ? scoreEvent.timestamp : scoreEvent.timestamp * 1000;
+            this._lastScoreTimestampMs = score.timestampMs;
+          } else if (Number.isFinite(score.timestamp)) {
+            const tMs = score.timestamp > 1e10 ? score.timestamp : score.timestamp * 1000;
             if (this._lastScoreTimestampMs !== null) {
               deltaSec = (tMs - this._lastScoreTimestampMs) / 1000.0;
             }
@@ -436,23 +441,37 @@ export class MissionController {
             }
             this._lastScoreSimTime = simTime;
           }
+        } else if (typeof scoreEvent === 'object' && scoreEvent !== null) {
+          if (Number.isFinite(scoreEvent.deltaSeconds)) {
+            deltaSec = scoreEvent.deltaSeconds;
+          } else if (Number.isFinite(scoreEvent.deltaMs)) {
+            deltaSec = scoreEvent.deltaMs / 1000.0;
+          } else if (Number.isFinite(scoreEvent.intervalSeconds)) {
+            deltaSec = scoreEvent.intervalSeconds;
+          }
         }
 
         const targetSec = CADENCE_CONFIG.TARGET_INTERVAL; // 1.75
         let devMs = 0.0;
         if (deltaSec > 0.0) {
           devMs = Math.abs(deltaSec - targetSec) * 1000.0;
-        } else if (typeof scoreEvent === 'object' && scoreEvent !== null && Number.isFinite(scoreEvent.deviationMs)) {
-          devMs = scoreEvent.deviationMs;
+        } else if ((typeof score === 'object' && score !== null && Number.isFinite(score.deviationMs)) ||
+                   (typeof scoreEvent === 'object' && scoreEvent !== null && Number.isFinite(scoreEvent.deviationMs))) {
+          devMs = score?.deviationMs ?? scoreEvent?.deviationMs ?? 0.0;
         }
 
         const isOnCadence = Boolean(
-          typeof scoreEvent === 'object' && scoreEvent !== null && (
+          (typeof score === 'object' && score !== null && (
+            score.isOnCadence ||
+            score.cadenceMultiplier > 1.0 ||
+            score.multipliers?.cadence > 1.0
+          )) ||
+          (typeof scoreEvent === 'object' && scoreEvent !== null && (
             scoreEvent.isOnCadence ||
             scoreEvent.cadenceMultiplier > 1.0 ||
-            scoreEvent.multipliers?.cadence > 1.0 ||
-            (deltaSec > 0.0 && devMs <= (CADENCE_CONFIG.WINDOW_TOLERANCE * 1000.0 + 1e-6))
-          )
+            scoreEvent.multipliers?.cadence > 1.0
+          )) ||
+          (deltaSec > 0.0 && devMs <= (CADENCE_CONFIG.WINDOW_TOLERANCE * 1000.0 + 1e-6))
         );
 
         this._cadenceTelemetry.totalChapter2Catches++;

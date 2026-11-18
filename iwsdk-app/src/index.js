@@ -59,6 +59,7 @@ World.create(document.getElementById('scene-container'), projectOptions).then((w
             window.celestialTransformation = envSystem.transformationController;
             window.planetUnlockCelebration = envSystem.unlockCelebration;
             window.planetUnlockUI = envSystem.unlockUI;
+            window.progressionFeedbackUI = envSystem.progressionFeedbackUI;
             window.narrativeDirector = envSystem.narrativeDirector;
             window.orreryVisualSystem = liveOrrery;
             window.__ORRERY_SYSTEM__ = liveOrrery;
@@ -66,8 +67,8 @@ World.create(document.getElementById('scene-container'), projectOptions).then((w
         console.log(`[CelestialEnvironmentSystem] Started in "${startupMode}" mode`);
     }
 
-    // Resolve launchHand: defaults to 'left' (off hand), overridable via ?launchHand=right|either in URL
-    let launchHand = 'left';
+    // Resolve launchHand: defaults to 'either' (supports pinching with either hand in IWER & Quest), overridable via ?launchHand=left|right in URL
+    let launchHand = 'either';
     let targetOverride = null;
     if (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') {
         const params = new URLSearchParams(window.location.search);
@@ -126,7 +127,16 @@ World.create(document.getElementById('scene-container'), projectOptions).then((w
 
     // Add canonical gameplayKenGroup to world scene
     if (world.scene && game.gameplayKenGroup) {
+        if (typeof game.gameplayKenGroup.position?.set === 'function') {
+            game.gameplayKenGroup.position.set(0.0, 1.25, -0.45);
+        }
+        if (typeof game.gameplayKenGroup.updateMatrixWorld === 'function') {
+            game.gameplayKenGroup.updateMatrixWorld(true);
+        }
         world.scene.add(game.gameplayKenGroup);
+        if (envSystem?.progressionFeedbackUI) {
+            envSystem.progressionFeedbackUI.setKenGroup(game.gameplayKenGroup);
+        }
     }
 
     // Setup debug visuals and diagnostics (?debug URL parameter only)

@@ -67,6 +67,12 @@ import { BinarySystem } from './physics/BinarySystem.js';
 import { CaptureBurn } from './physics/CaptureBurn.js';
 import { FinaleManager } from './physics/FinaleManager.js';
 import { GameLoop } from './game/GameLoop.js';
+import { Vector3, Group } from 'three';
+import { createKendamaAssemblyGroup } from './scene-assets/cup-preview.scene-asset.js';
+
+// Pre-allocated static vectors to guarantee zero per-frame heap allocations
+const _tempBallPos = new Vector3();
+const _defaultSpikeSeatedPos = new Vector3(0.0, 0.078, 0.0);
 
 // Safe dynamic Three.js loading supporting both browser/bundler and Node headless test runtimes
 let THREE = globalThis.THREE;
@@ -88,33 +94,165 @@ if (!THREE) {
  */
 export class MockGroup {
   constructor() {
+    this.children = [];
+    this.userData = {};
     this.position = {
       x: 0, y: 0, z: 0,
       set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; },
-      copy(p) { this.x = p.x ?? 0; this.y = p.y ?? 0; this.z = p.z ?? 0; return this; }
+      copy(p) { this.x = p.x ?? 0; this.y = p.y ?? 0; this.z = p.z ?? 0; return this; },
+      clone() { return { x: this.x, y: this.y, z: this.z }; }
     };
     this.quaternion = {
       x: 0, y: 0, z: 0, w: 1,
       set(x, y, z, w) { this.x = x; this.y = y; this.z = z; this.w = w; return this; },
-      copy(q) { this.x = q.x ?? 0; this.y = q.y ?? 0; this.z = q.z ?? 0; this.w = q.w ?? 1; return this; }
+      copy(q) { this.x = q.x ?? 0; this.y = q.y ?? 0; this.z = q.z ?? 0; this.w = q.w ?? 1; return this; },
+      clone() { return { x: this.x, y: this.y, z: this.z, w: this.w }; }
     };
     this.matrixWorld = { elements: new Float32Array(16) };
   }
 
-  updateMatrixWorld(_force = true) {
+  add(...objects) {
+    this.children.push(...objects);
+    for (const obj of objects) {
+      if (obj) obj.parent = this;
+    }
     return this;
+  }
+
+  getObjectByName(name) {
+    for (const child of this.children) {
+      if (child.name === name) return child;
+      if (typeof child.getObjectByName === 'function') {
+        const found = child.getObjectByName(name);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  }
+
+  updateMatrixWorld(_force = true) {
+    if (this.position && this.matrixWorld?.elements) {
+      this.matrixWorld.elements[12] = this.position.x ?? 0;
+      this.matrixWorld.elements[13] = this.position.y ?? 0;
+      this.matrixWorld.elements[14] = this.position.z ?? 0;
+    }
+    return this;
+  }
+
+  worldToLocal(v) {
+    if (v && this.position) {
+      v.x -= this.position.x;
+      v.y -= this.position.y;
+      v.z -= this.position.z;
+    }
+    return v;
   }
 }
 
 /**
- * Creates a canonical gameplayKenGroup instance.
+ * Attaches the complete procedural Kendama assembly (with seated Tama) to gameplayKenGroup.
+ * Reuses the existing canonical procedural assembly from cup-preview.scene-asset.js.
+ * Idempotent: returns existing assembly if already attached.
+ *
+ * @param {any} kenGroup - Target gameplayKenGroup
+ * @param {Object} [options={}] - Optional assembly options
+ * @returns {any} The attached kendama assembly root
+ */
+export function attachKendamaAssembly(kenGroup, options = {}) {
+  if (!kenGroup || typeof kenGroup.add !== 'function') return null;
+
+  // Idempotent guard: check if assembly is already attached
+  if (typeof kenGroup.getObjectByName === 'function') {
+    const existing = kenGroup.getObjectByName('kendama-assembly-root');
+    if (existing) return existing;
+  }
+
+  try {
+    const assembly = createKendamaAssemblyGroup(options.materials, {
+      includeTama: options.includeTama !== false,
+      preset: options.preset || null
+    });
+    kenGroup.add(assembly);
+
+    const tamaMesh = assembly.getObjectByName('celestial-tama');
+    if (tamaMesh) {
+      kenGroup.userData = kenGroup.userData || {};
+      kenGroup.userData.tamaMesh = tamaMesh;
+      kenGroup.userData.seatedTamaPosition = tamaMesh.position.clone();
+    }
+    return assembly;
+  } catch (err) {
+    console.warn('[main.js] attachKendamaAssembly warning:', err?.message || err);
+    return null;
+  }
+}
+
+/**
+ * Updates the celestial Tama mesh position based on the current BallState without per-frame allocations.
+ * In 'air' or 'catching' mode, follows world-space BallState.position via local coordinate transformation.
+ * In 'seated' mode, remains rigidly seated on the Ken.
+ *
+ * @param {any} kenGroup - Canonical gameplayKenGroup
+ * @param {BallState} ballState - Current canonical BallState
+ * @param {string} [seatCupKey='spike'] - Optional seated cup override
+ */
+export function updateGameplayTamaMesh(kenGroup, ballState, seatCupKey = 'spike') {
+  if (!kenGroup || !ballState) return;
+
+  const tamaMesh = kenGroup.userData?.tamaMesh ||
+    (typeof kenGroup.getObjectByName === 'function' ? kenGroup.getObjectByName('celestial-tama') : null);
+
+  if (!tamaMesh) return;
+
+  const mode = ballState.mode || 'seated';
+
+  if (mode === 'air' || mode === 'catching') {
+    const pos = ballState.position;
+    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y) && Number.isFinite(pos.z)) {
+      _tempBallPos.set(pos.x, pos.y, pos.z);
+      if (tamaMesh.parent && typeof tamaMesh.parent.worldToLocal === 'function') {
+        tamaMesh.parent.worldToLocal(_tempBallPos);
+        tamaMesh.position.copy(_tempBallPos);
+      } else if (typeof kenGroup.worldToLocal === 'function') {
+        kenGroup.worldToLocal(_tempBallPos);
+        tamaMesh.position.copy(_tempBallPos);
+      } else {
+        tamaMesh.position.set(pos.x, pos.y, pos.z);
+      }
+    }
+  } else {
+    // 'seated' mode: remain seated on the Ken
+    const seatedPos = kenGroup.userData?.seatedTamaPosition || _defaultSpikeSeatedPos;
+    if (tamaMesh.position && typeof tamaMesh.position.copy === 'function') {
+      tamaMesh.position.copy(seatedPos);
+    } else if (tamaMesh.position) {
+      tamaMesh.position.x = seatedPos.x;
+      tamaMesh.position.y = seatedPos.y;
+      tamaMesh.position.z = seatedPos.z;
+    }
+    if (tamaMesh.quaternion && typeof tamaMesh.quaternion.set === 'function') {
+      tamaMesh.quaternion.set(0, 0, 0, 1);
+    }
+  }
+}
+
+/**
+ * Creates a canonical gameplayKenGroup instance with attached procedural Kendama assembly.
+ * @param {Object} [options={}]
  * @returns {any} THREE.Group or MockGroup
  */
-export function createGameplayKenGroup() {
+export function createGameplayKenGroup(options = {}) {
+  let group;
   if (THREE && typeof THREE.Group === 'function') {
-    return new THREE.Group();
+    group = new THREE.Group();
+  } else if (Group) {
+    group = new Group();
+  } else {
+    group = new MockGroup();
   }
-  return new MockGroup();
+  group.name = 'gameplay-ken-group';
+  attachKendamaAssembly(group, options);
+  return group;
 }
 
 /**
@@ -287,6 +425,9 @@ export class DefaultWorldRenderer {
         elapsedTime: snapshot.timestamp ? snapshot.timestamp / 1000 : null
       });
     }
+    if (snapshot?.gameplayKenGroup && snapshot?.ballState) {
+      updateGameplayTamaMesh(snapshot.gameplayKenGroup, snapshot.ballState);
+    }
   }
 }
 
@@ -352,6 +493,7 @@ export class GamePipeline {
   constructor(options = {}) {
     this.eventBus = options.eventBus || defaultEventBus;
     this.gameplayKenGroup = options.gameplayKenGroup || gameplayKenGroup;
+    attachKendamaAssembly(this.gameplayKenGroup, options);
 
     // Optional GameLoop reference
     this.gameLoop = options.gameLoop || null;
@@ -613,6 +755,11 @@ export class GamePipeline {
     this._currentTimestamp = timestamp;
     this._currentDtClamped = dtClamped;
 
+    const bs = this.catchDetector?.getBallState?.();
+    if (bs) {
+      updateGameplayTamaMesh(this.gameplayKenGroup, bs);
+    }
+
     this.worldRenderer.render(this._frozenSnapshot);
     this.totalRenderTicks++;
 
@@ -663,6 +810,7 @@ export function tick(timestamp, xrFrame = null, forcedDelta = null) {
 export function initGame(options = {}) {
   const bus = options.eventBus || defaultEventBus;
   const kenGroup = options.gameplayKenGroup || gameplayKenGroup;
+  attachKendamaAssembly(kenGroup, options);
 
   // Convenience resolution when gameLoop is provided directly
   if (options.gameLoop) {

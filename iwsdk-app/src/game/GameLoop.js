@@ -159,6 +159,11 @@ export class GameLoop {
       this.catchFlow ? this.catchFlow.state : BallMode.SEATED
     );
 
+    // Pre-allocated structures for zero-allocation candidate cup resolution
+    this._canonicalCups = Object.freeze([CupKey.BIG, CupKey.SMALL, CupKey.BASE, CupKey.SPIKE]);
+    this._tempCandidatePos = { x: 0.0, y: 0.0, z: 0.0 };
+    this._tempCandidateNormal = { x: 0.0, y: 0.0, z: 0.0 };
+
     // Subscriptions to Person B events
     this._unsubTarget = this.eventBus.on(Events.TARGET, (target) => {
       if (this.targetOverride) {
@@ -421,6 +426,72 @@ export class GameLoop {
   }
 
   /**
+   * Resolves the best candidate cup to evaluate on this frame.
+   * If an active target override is configured (debug mode), that cup is always used.
+   * If a cup candidate is already undergoing multi-frame confirmation hysteresis,
+   * it is preserved to avoid resetting the temporal confirmation count.
+   * Otherwise, all canonical cups are tested against ball position and orientation thresholds,
+   * prioritizing the activeTargetCup when plausible, or the closest physically valid cup.
+   *
+   * @param {{ x: number, y: number, z: number }} ballPos
+   * @param {{ x: number, y: number, z: number }} _ballVel
+   * @param {any} [activeKen]
+   * @returns {string} Target cup key (e.g. 'big', 'small', 'base', 'spike')
+   */
+  _resolveCandidateCup(ballPos, _ballVel, activeKen) {
+    if (this.targetOverride) {
+      return this.targetOverride;
+    }
+
+    if (!this.detector || typeof this.detector.getWorldCupTransform !== 'function') {
+      return this.activeTargetCup || CupKey.BIG;
+    }
+
+    // 1. If candidate is already in confirmation hysteresis, stick with it to complete confirmation
+    const activeCandidate = this.detector.candidateCup;
+    if (activeCandidate) {
+      return activeCandidate;
+    }
+
+    // 2. Prioritize activeTargetCup if ball is within its assisted radius and orientation is valid
+    const targetCup = this.activeTargetCup || CupKey.BIG;
+    const cups = [targetCup, ...this._canonicalCups.filter((c) => c !== targetCup)];
+
+    let bestCup = targetCup;
+    let minDistance = Infinity;
+
+    for (const cup of cups) {
+      const transform = this.detector.getWorldCupTransform(cup, this._tempCandidatePos, this._tempCandidateNormal);
+      if (!transform) continue;
+
+      const radii = this.detector.catchRadii?.[cup];
+      const assistedRadius = radii?.assisted ?? 0.08;
+      const dx = ballPos.x - transform.position.x;
+      const dy = ballPos.y - transform.position.y;
+      const dz = ballPos.z - transform.position.z;
+      const dist = Math.hypot(dx, dy, dz);
+
+      // Check cup opening orientation relative to world UP (0, 1, 0)
+      const dotUp = transform.normal.y;
+      const orientationThresh = this.detector.orientationThresholds?.[cup];
+      const maxAngleDeg = orientationThresh?.maxAngleDeg ?? 40.0;
+      const angleDeg = Math.acos(Math.max(-1.0, Math.min(1.0, dotUp))) * (180.0 / Math.PI);
+
+      if (dist <= assistedRadius && angleDeg <= maxAngleDeg) {
+        if (cup === targetCup) {
+          return cup;
+        }
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestCup = cup;
+        }
+      }
+    }
+
+    return bestCup;
+  }
+
+  /**
    * Stage 2: Advances ballistic trajectory, updates CatchFlow, and evaluates catches.
    *
    * @param {number} dt - Frame delta time in seconds
@@ -462,10 +533,12 @@ export class GameLoop {
       this.lastEvaluatedVelocity = ballVel ? { ...ballVel } : { x: 0, y: 0, z: 0 };
       this.lastEvaluatedBallPosition = ballPos ? { ...ballPos } : { x: 0, y: 0, z: 0 };
 
+      const candidateCup = this._resolveCandidateCup(ballPos, ballVel, activeKen);
+
       const evalRes = this.detector.evaluateCatch(
         ballPos,
         ballVel,
-        this.activeTargetCup,
+        candidateCup,
         nowSec,
         dt
       );

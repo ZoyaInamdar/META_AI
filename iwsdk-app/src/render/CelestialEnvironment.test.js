@@ -520,13 +520,13 @@ describe('CelestialEnvironment - Phase 1 Pastel Galaxy Foundation', () => {
                 assert.equal(spinPlinth.visible, false, 'spin-plinth hidden');
                 assert.equal(welcomePanel.visible, false, 'welcome-panel hidden');
 
-                // Select plinth & Kendama:
-                assert.equal(selectPlinth.visible, true, 'select-plinth must stay visible so cup-preview can render');
+                // Select plinth & Kendama showroom preview: hidden in gameplay
+                assert.equal(selectPlinth.visible, false, 'select-plinth hidden in gameplay');
                 assert.equal(pillar.visible, false, 'pedestal pillar hidden');
                 assert.equal(plinthContact.visible, false, 'plinth contact hidden');
                 assert.equal(presetSelector.visible, false, 'preset selector hidden');
-                assert.equal(cupPreview.visible, true, 'cup-preview root visible');
-                assert.equal(activeCenterKendama.visible, true, 'active kendama big-cup-three-quarter visible');
+                assert.equal(cupPreview.visible, false, 'cup-preview showroom root hidden in gameplay');
+                assert.equal(activeCenterKendama.visible, false, 'active center showroom kendama hidden in gameplay');
                 assert.equal(leftCavity.visible, false, 'cavity view hidden');
                 assert.equal(rightProfile.visible, false, 'profile view hidden');
 
@@ -827,11 +827,11 @@ describe('CelestialEnvironment - Phase 1 Pastel Galaxy Foundation', () => {
             assert.equal(Math.round(restoredAnchor.y * 100) / 100, 1.48);
             assert.equal(Math.round(restoredAnchor.z * 100) / 100, -1.80);
 
-            // Kendama components restored
-            assert.equal(selectPlinth.visible, true, 'select-plinth restored in gameplay');
-            assert.equal(cupPreview.visible, true, 'cup-preview restored in gameplay');
-            assert.equal(centerKendama.visible, true, 'active kendama restored in gameplay');
-            assert.equal(tamaMesh.visible, true, 'celestial tama restored in gameplay');
+            // Kendama showroom components hidden in gameplay (canonical Ken in gameplayKenGroup)
+            assert.equal(selectPlinth.visible, false, 'select-plinth hidden in gameplay');
+            assert.equal(cupPreview.visible, false, 'cup-preview hidden in gameplay');
+            assert.equal(centerKendama.visible, false, 'active showroom kendama hidden in gameplay');
+            assert.equal(tamaMesh.visible, false, 'showroom celestial tama hidden in gameplay');
 
             // 4. Helper API Methods
             system.setPlanetShowcaseMode(true);
