@@ -101,6 +101,7 @@ World.create(document.getElementById('scene-container'), projectOptions).then((w
         hand: 'right',
         gameplayKenGroup,
     });
+    console.log('[DIAGNOSTIC] Celestial Kendama initGame booted successfully:', !!game);
 
     // Add canonical gameplayKenGroup to world scene
     if (world.scene && game.gameplayKenGroup) {

@@ -40,6 +40,12 @@ import { PoseFilter } from '../input/PoseFilter.js';
 import { extractWristJoint, extractPinchJoints } from '../input/XRHandJointExtractor.js';
 import { PinchDetector } from '../input/PinchDetector.js';
 import { DEFAULT_ROLL_GAIN, amplifyWristRoll } from '../input/wristRoll.js';
+import {
+  DEFAULT_PITCH_GAIN,
+  PITCH_BLEND_DURATION,
+  amplifyWristOrientation,
+  replaceWristPitchRoll,
+} from '../input/wristPitch.js';
 
 export class GameLoop {
   /**
@@ -103,15 +109,29 @@ export class GameLoop {
       targetCadenceSeconds,
     });
 
-    this.targetOverride = options.targetOverride || null;
+    this.targetOverride = options.targetOverride || options.target || null;
     this.activeTargetCup = this.targetOverride || initialCup;
     this._isTrackingValid = true;
     this.lastEvaluatedVelocity = null;
     this.lastEvaluatedBallPosition = null;
     this.lastTickEvaluatedCatch = false;
     this.rollGain = options.rollGain !== undefined ? options.rollGain : DEFAULT_ROLL_GAIN;
+    this.pitchGain = options.pitchGain !== undefined ? options.pitchGain : DEFAULT_PITCH_GAIN;
+    this.currentEffectivePitchGain = (this.activeTargetCup === 'base') ? this.pitchGain : 1.0;
+    this.rollDegOverride = (options.rollDegOverride !== undefined && Number.isFinite(options.rollDegOverride))
+      ? options.rollDegOverride
+      : (options.rollDeg !== undefined && Number.isFinite(options.rollDeg))
+        ? options.rollDeg
+        : null;
+    this.pitchDegOverride = (options.pitchDegOverride !== undefined && Number.isFinite(options.pitchDegOverride))
+      ? options.pitchDegOverride
+      : (options.pitchDeg !== undefined && Number.isFinite(options.pitchDeg))
+        ? options.pitchDeg
+        : null;
     this.lastRawTwistDeg = 0;
     this.lastAmplifiedTwistDeg = 0;
+    this.lastRawPitchDeg = 0;
+    this.lastAmplifiedPitchDeg = 0;
 
     // WebXR context references for wrist joint extraction
     this.referenceSpace = options.referenceSpace || null;
@@ -308,6 +328,19 @@ export class GameLoop {
             ? this.poseFilter.filter(inputOutput.position, dt)
             : inputOutput.position;
 
+          // Advance smooth pitch gain blend towards target (pitchGain for base, 1.0 for others)
+          const targetPitchGain = (this.activeTargetCup === 'base') ? this.pitchGain : 1.0;
+          if (dt > 0 && Math.abs(this.currentEffectivePitchGain - targetPitchGain) > 1e-4) {
+            const maxChange = (dt / PITCH_BLEND_DURATION) * Math.abs(this.pitchGain - 1.0);
+            if (this.currentEffectivePitchGain < targetPitchGain) {
+              this.currentEffectivePitchGain = Math.min(targetPitchGain, this.currentEffectivePitchGain + maxChange);
+            } else {
+              this.currentEffectivePitchGain = Math.max(targetPitchGain, this.currentEffectivePitchGain - maxChange);
+            }
+          } else {
+            this.currentEffectivePitchGain = targetPitchGain;
+          }
+
           if (this.gameplayKenGroup) {
             if (typeof this.gameplayKenGroup.position?.copy === 'function') {
               this.gameplayKenGroup.position.copy(filteredPos);
@@ -317,20 +350,38 @@ export class GameLoop {
               this.gameplayKenGroup.quaternion.copy(inputOutput.quaternion);
             }
 
-            // Apply 2x wrist-roll amplification to gameplayKenGroup (hand input only)
-            const rollDetails = {};
-            const amplifiedQuat = amplifyWristRoll(
+            // Replace measured pitch and/or roll if debug override is active
+            if (this.rollDegOverride !== null || this.pitchDegOverride !== null) {
+              const replacedQuat = replaceWristPitchRoll(this.gameplayKenGroup.quaternion, {
+                pitchDeg: this.pitchDegOverride,
+                rollDeg: this.rollDegOverride,
+              });
+              if (typeof this.gameplayKenGroup.quaternion?.copy === 'function') {
+                this.gameplayKenGroup.quaternion.copy(replacedQuat);
+              } else {
+                this.gameplayKenGroup.quaternion = replacedQuat;
+              }
+            }
+
+            // Apply roll and pitch amplification to gameplayKenGroup (hand input only)
+            const orientationDetails = {};
+            const amplifiedQuat = amplifyWristOrientation(
               this.gameplayKenGroup.quaternion,
-              this.rollGain,
-              rollDetails
+              {
+                rollGain: this.rollGain,
+                pitchGain: this.currentEffectivePitchGain,
+              },
+              orientationDetails
             );
             if (typeof this.gameplayKenGroup.quaternion?.copy === 'function') {
               this.gameplayKenGroup.quaternion.copy(amplifiedQuat);
             } else {
               this.gameplayKenGroup.quaternion = amplifiedQuat;
             }
-            this.lastRawTwistDeg = rollDetails.rawTwistDeg ?? 0;
-            this.lastAmplifiedTwistDeg = rollDetails.amplifiedTwistDeg ?? 0;
+            this.lastRawTwistDeg = orientationDetails.rawTwistDeg ?? 0;
+            this.lastAmplifiedTwistDeg = orientationDetails.amplifiedTwistDeg ?? 0;
+            this.lastRawPitchDeg = orientationDetails.rawPitchDeg ?? 0;
+            this.lastAmplifiedPitchDeg = orientationDetails.amplifiedPitchDeg ?? 0;
           }
         }
       } else {
