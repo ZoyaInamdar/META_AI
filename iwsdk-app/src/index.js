@@ -15,6 +15,7 @@ import { initGame, gameplayKenGroup } from './main.js';
 import { GameLoop } from './game/GameLoop.js';
 import { HandPoseAdapter } from './input/HandPoseAdapter.js';
 import { setupDebugScene } from './game/debugScene.js';
+import { AudioSystem } from './audio/AudioSystem.js';
 
 // Ensure hand tracking is requested in XR session features
 if (!projectOptions.xr) {
@@ -102,6 +103,26 @@ World.create(document.getElementById('scene-container'), projectOptions).then((w
         gameplayKenGroup,
     });
     console.log('[DIAGNOSTIC] Celestial Kendama initGame booted successfully:', !!game);
+
+    // Person C: AudioSystem initialization and first-interaction unlock
+    const audioSystem = new AudioSystem(game.eventBus);
+    audioSystem.init();
+    gameLoop.setAudioSystem(audioSystem);
+
+    if (typeof window !== 'undefined') {
+        window.audioSystem = audioSystem;
+        window.__AUDIO_SYSTEM__ = audioSystem;
+
+        const unlockAudio = () => {
+            audioSystem.unlock();
+            window.removeEventListener('pointerdown', unlockAudio);
+            window.removeEventListener('keydown', unlockAudio);
+            window.removeEventListener('touchstart', unlockAudio);
+        };
+        window.addEventListener('pointerdown', unlockAudio, { once: true });
+        window.addEventListener('keydown', unlockAudio, { once: true });
+        window.addEventListener('touchstart', unlockAudio, { once: true });
+    }
 
     // Add canonical gameplayKenGroup to world scene
     if (world.scene && game.gameplayKenGroup) {

@@ -85,6 +85,7 @@ export class GameLoop {
     this.gameplayKenGroup = gameplayKenGroup;
     this.inputSource = inputSource;
     this.inputSourceType = inputSourceType;
+    this.audioSystem = options.audioSystem || null;
 
     // Pose filter for smoothing noisy hardware hand tracking (bypassed for FakeInput)
     this.poseFilter = poseFilter !== undefined
@@ -561,6 +562,15 @@ export class GameLoop {
   }
 
   /**
+   * Sets or updates the active AudioSystem.
+   *
+   * @param {Object} audioSystem
+   */
+  setAudioSystem(audioSystem) {
+    this.audioSystem = audioSystem;
+  }
+
+  /**
    * Initiates ball launch from seated state.
    *
    * @param {string} [source='manual'] - Input source triggering the launch ('pinch', 'space/fakeInput', etc.)
@@ -569,6 +579,12 @@ export class GameLoop {
   launchBall(source = 'manual') {
     if (this.catchFlow.state !== 'seated') {
       return false;
+    }
+
+    if (this.audioSystem && typeof this.audioSystem.unlock === 'function') {
+      this.audioSystem.unlock();
+    } else if (typeof window !== 'undefined' && window.__AUDIO_SYSTEM__ && typeof window.__AUDIO_SYSTEM__.unlock === 'function') {
+      window.__AUDIO_SYSTEM__.unlock();
     }
 
     const launchPos = this.catchFlow.ballPosition;
